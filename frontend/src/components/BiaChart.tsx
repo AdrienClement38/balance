@@ -6,12 +6,11 @@ interface BiaChartProps {
   history: Measurement[];
 }
 
-type MetricType = "weight" | "fat" | "muscle";
+type MetricType = "weight" | "fat" | "ffm" | "muscle" | "water" | "bone" | "visceral" | "bmr";
 
 export function BiaChart({ history }: BiaChartProps) {
   const [metric, setMetric] = useState<MetricType>("weight");
 
-  // Si pas d'historique
   if (history.length === 0) {
     return (
       <div className="glass-panel" style={{ height: "300px", display: "flex", alignItems: "center", justifyItems: "center", justifyContent: "center" }}>
@@ -20,18 +19,32 @@ export function BiaChart({ history }: BiaChartProps) {
     );
   }
 
-  // Trier par date croissante pour le graphique
+  // Trier par date croissante
   const sortedData = [...history].reverse();
 
   // Extraire les valeurs à afficher
   const getVal = (m: Measurement) => {
+    const w = parseFloat(m.weightKg);
+    const f = m.fatPct ? parseFloat(m.fatPct) : 0;
+    
     switch (metric) {
       case "weight":
-        return parseFloat(m.weightKg);
+        return w;
       case "fat":
-        return m.fatPct ? parseFloat(m.fatPct) : 0;
+        return f;
+      case "ffm":
+        // Masse sans graisse (calculée = poids - masse grasse)
+        return w - (w * f) / 100;
       case "muscle":
         return m.musclePct ? parseFloat(m.musclePct) : 0;
+      case "water":
+        return m.waterPct ? parseFloat(m.waterPct) : 0;
+      case "bone":
+        return m.boneMassKg ? parseFloat(m.boneMassKg) : 0;
+      case "visceral":
+        return m.visceralFat || 0;
+      case "bmr":
+        return m.bmr || 0;
       default:
         return 0;
     }
@@ -54,7 +67,6 @@ export function BiaChart({ history }: BiaChartProps) {
     return { x, y, val: getVal(d), date: new Date(d.createdAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) };
   });
 
-  // Générer le path SVG pour la ligne
   let linePath = "";
   let areaPath = "";
 
@@ -62,7 +74,6 @@ export function BiaChart({ history }: BiaChartProps) {
     linePath = `M ${points[0].x} ${points[0].y} ` + points.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
     areaPath = `${linePath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`;
   } else if (points.length === 1) {
-    // Si un seul point, dessiner une ligne horizontale au centre
     linePath = `M ${padding} ${height / 2} L ${width - padding} ${height / 2}`;
   }
 
@@ -70,28 +81,55 @@ export function BiaChart({ history }: BiaChartProps) {
     switch (metric) {
       case "weight": return "Poids (kg)";
       case "fat": return "Masse grasse (%)";
+      case "ffm": return "Masse sans graisse (kg)";
       case "muscle": return "Masse musculaire (%)";
+      case "water": return "Masse hydrique (%)";
+      case "bone": return "Masse osseuse (kg)";
+      case "visceral": return "Graisse viscérale (niveau)";
+      case "bmr": return "Métabolisme (kcal)";
     }
   };
 
+  const metricTypes: { type: MetricType; label: string }[] = [
+    { type: "weight", label: "Poids" },
+    { type: "fat", label: "Gras %" },
+    { type: "ffm", label: "Sans gras" },
+    { type: "muscle", label: "Muscle %" },
+    { type: "water", label: "Eau %" },
+    { type: "bone", label: "Os (kg)" },
+    { type: "visceral", label: "Viscérale" },
+    { type: "bmr", label: "BMR" }
+  ];
+
   return (
     <div className="glass-panel" style={{ gridColumn: "span 2" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <TrendingUp size={20} style={{ color: "var(--accent)" }} />
           <h3 style={{ fontSize: "1.1rem" }}>Évolution {getMetricLabel()}</h3>
         </div>
-        <div style={{ display: "flex", gap: "8px", background: "rgba(255, 255, 255, 0.03)", borderRadius: "var(--radius-sm)", padding: "4px", border: "1px solid var(--glass-border)" }}>
-          {(["weight", "fat", "muscle"] as MetricType[]).map((t) => (
+        
+        {/* Toggle Buttons pour TOUTES les métriques */}
+        <div style={{ 
+          display: "flex", 
+          gap: "6px", 
+          background: "rgba(255, 255, 255, 0.03)", 
+          borderRadius: "var(--radius-sm)", 
+          padding: "6px", 
+          border: "1px solid var(--glass-border)",
+          overflowX: "auto",
+          whiteSpace: "nowrap"
+        }}>
+          {metricTypes.map((t) => (
             <button
-              key={t}
-              onClick={() => setMetric(t)}
+              key={t.type}
+              onClick={() => setMetric(t.type)}
               style={{
-                background: metric === t ? "var(--accent)" : "none",
+                background: metric === t.type ? "var(--accent)" : "none",
                 border: "none",
-                color: metric === t ? "#fff" : "var(--text-secondary)",
+                color: metric === t.type ? "#fff" : "var(--text-secondary)",
                 padding: "6px 12px",
-                fontSize: "0.8rem",
+                fontSize: "0.75rem",
                 fontWeight: 600,
                 borderRadius: "6px",
                 cursor: "pointer",
@@ -99,7 +137,7 @@ export function BiaChart({ history }: BiaChartProps) {
                 transition: "all 0.2s ease",
               }}
             >
-              {t === "weight" ? "Poids" : t === "fat" ? "Gras %" : "Muscle %"}
+              {t.label}
             </button>
           ))}
         </div>
@@ -115,7 +153,7 @@ export function BiaChart({ history }: BiaChartProps) {
             </linearGradient>
           </defs>
 
-          {/* Grille de fond (Lignes Y) */}
+          {/* Grille */}
           {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
             const y = padding + ratio * (height - padding * 2);
             const val = maxVal - ratio * valRange;
@@ -131,13 +169,13 @@ export function BiaChart({ history }: BiaChartProps) {
                   fontWeight="600"
                   fontFamily="var(--font-sans)"
                 >
-                  {val.toFixed(metric === "weight" ? 1 : 0)}
+                  {val.toFixed(metric === "weight" || metric === "ffm" || metric === "bone" ? 1 : 0)}
                 </text>
               </g>
             );
           })}
 
-          {/* Tracer la courbe et la surface */}
+          {/* Courbes */}
           {points.length > 1 && (
             <>
               <path d={areaPath} className="chart-area" />
@@ -157,7 +195,6 @@ export function BiaChart({ history }: BiaChartProps) {
                 strokeWidth="3"
                 style={{ cursor: "pointer" }}
               />
-              {/* Tooltip text au survol */}
               <text
                 x={p.x}
                 y={p.y - 12}
@@ -167,9 +204,8 @@ export function BiaChart({ history }: BiaChartProps) {
                 textAnchor="middle"
                 fontFamily="var(--font-sans)"
               >
-                {p.val.toFixed(1)}
+                {p.val.toFixed(metric === "weight" || metric === "ffm" || metric === "bone" ? 1 : 0)}
               </text>
-              {/* Date sur l'axe X (limité à max 5 dates pour éviter la surcharge) */}
               {(points.length < 6 || i % Math.ceil(points.length / 5) === 0 || i === points.length - 1) && (
                 <text
                   x={p.x}

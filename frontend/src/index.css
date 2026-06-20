@@ -1,6 +1,7 @@
 /* Design System & Globals */
 
 :root {
+  /* Thème sombre par défaut */
   --bg-primary: #090a0f;
   --bg-secondary: #11131c;
   --bg-tertiary: #191c28;
@@ -9,15 +10,15 @@
   --glass-border: rgba(255, 255, 255, 0.07);
   --glass-glow: rgba(99, 102, 241, 0.15);
   
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
   --accent: #6366f1;
   --accent-light: #818cf8;
   --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
   --accent-cyan-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
   --success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
   
   --success: #10b981;
   --danger: #f43f5e;
@@ -33,11 +34,27 @@
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+:root.light-theme {
+  /* Configuration Thème Clair */
+  --bg-primary: #f4f6fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e2e8f0;
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-bg-hover: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-glow: rgba(99, 102, 241, 0.05);
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+}
+
 /* Base Styles */
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 body {
@@ -89,12 +106,17 @@ h1, h2, h3, h4, h5, h6 {
   -webkit-backdrop-filter: blur(16px);
   border-radius: var(--radius-md);
   padding: 24px;
-  transition: var(--transition);
+  box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.05);
 }
 
 .glass-panel:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+}
+
+.light-theme .glass-panel:hover {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.06);
 }
 
 .glass-panel-glow {
@@ -116,14 +138,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .input-field {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg-secondary);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 1rem;
   padding: 12px 16px;
-  transition: var(--transition);
   width: 100%;
 }
 
@@ -146,7 +167,6 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: var(--transition);
   text-decoration: none;
 }
 
@@ -167,14 +187,18 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-secondary);
   color: var(--text-primary);
   border: 1px solid var(--glass-border);
 }
 
 .btn-secondary:hover {
   background: var(--glass-bg-hover);
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.light-theme .btn-secondary:hover {
+  border-color: rgba(0, 0, 0, 0.2);
 }
 
 .btn:disabled {
@@ -267,6 +291,10 @@ h1, h2, h3, h4, h5, h6 {
 .chart-grid {
   stroke: rgba(255, 255, 255, 0.05);
   stroke-width: 1;
+}
+
+.light-theme .chart-grid {
+  stroke: rgba(0, 0, 0, 0.05);
 }
 
 /* Responsiveness */

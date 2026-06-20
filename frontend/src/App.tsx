@@ -16,7 +16,10 @@ import {
   AlertCircle,
   LogOut,
   User as UserIcon,
-  Sparkles
+  Sparkles,
+  Sun,
+  Moon,
+  ShieldAlert
 } from "lucide-react";
 
 export function App() {
@@ -24,6 +27,22 @@ export function App() {
   const [currentUser, setCurrentUser] = useState(api.auth.getCurrentUser());
   const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
   const [history, setHistory] = useState<Measurement[]>([]);
+
+  // Thème clair/sombre (par défaut sombre)
+  const [theme, setTheme] = useState<"dark" | "light">(
+    (localStorage.getItem("balance_theme") as "dark" | "light") || "dark"
+  );
+
+  // Appliquer la classe de thème sur l'élément racine html
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "light") {
+      root.classList.add("light-theme");
+    } else {
+      root.classList.remove("light-theme");
+    }
+    localStorage.setItem("balance_theme", theme);
+  }, [theme]);
 
   // Charger l'historique quand le profil change
   const fetchHistory = async () => {
@@ -56,6 +75,10 @@ export function App() {
     setHistory([]);
   };
 
+  const toggleTheme = () => {
+    setTheme(theme === "dark" ? "light" : "dark");
+  };
+
   // Récupérer la dernière pesée
   const lastMeasurement = history[0] || null;
 
@@ -69,22 +92,22 @@ export function App() {
 
   const getFatStatus = (fatPct: number, gender: string) => {
     if (gender === "male") {
-      if (fatPct < 10) return { label: "Très faible", cat: "warning" as const };
-      if (fatPct < 20) return { label: "Normal (Idéal)", cat: "success" as const };
+      if (fatPct < 10) return { label: "Masse grasse très faible", cat: "warning" as const };
+      if (fatPct < 20) return { label: "Taux sain (Idéal)", cat: "success" as const };
       if (fatPct < 25) return { label: "Moyen", cat: "warning" as const };
-      return { label: "Élevé", cat: "danger" as const };
+      return { label: "Excès de gras", cat: "danger" as const };
     } else {
-      if (fatPct < 18) return { label: "Très faible", cat: "warning" as const };
-      if (fatPct < 28) return { label: "Normal (Idéal)", cat: "success" as const };
+      if (fatPct < 18) return { label: "Masse grasse très faible", cat: "warning" as const };
+      if (fatPct < 28) return { label: "Taux sain (Idéal)", cat: "success" as const };
       if (fatPct < 33) return { label: "Moyen", cat: "warning" as const };
-      return { label: "Élevé", cat: "danger" as const };
+      return { label: "Excès de gras", cat: "danger" as const };
     }
   };
 
   const getVisceralStatus = (level: number) => {
-    if (level <= 9) return { label: "Normal (Sain)", cat: "success" as const };
-    if (level <= 14) return { label: "Élevé (Attention)", cat: "warning" as const };
-    return { label: "Très élevé (Danger)", cat: "danger" as const };
+    if (level <= 9) return { label: "Niveau sain (Faible risque)", cat: "success" as const };
+    if (level <= 14) return { label: "Élevé (Prudence)", cat: "warning" as const };
+    return { label: "Très élevé (Risque cardio)", cat: "danger" as const };
   };
 
   if (!isAuthenticated) {
@@ -107,11 +130,24 @@ export function App() {
           </div>
         </div>
         
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Bouton de Toggle de Thème */}
+          <button
+            onClick={toggleTheme}
+            className="btn btn-secondary"
+            style={{ padding: "8px", borderRadius: "50%", width: "38px", height: "38px" }}
+            title={theme === "dark" ? "Passer au thème clair" : "Passer au thème sombre"}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
             <UserIcon size={16} />
-            <span>{currentUser?.email}</span>
+            <span style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {currentUser?.email}
+            </span>
           </div>
+          
           <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: "8px 12px", fontSize: "0.85rem" }}>
             <LogOut size={16} />
             <span>Déconnexion</span>
@@ -119,23 +155,23 @@ export function App() {
         </div>
       </header>
 
-      {/* Profile switcher */}
+      {/* Profils Switcher */}
       <ProfileList activeProfile={activeProfile} onSelectProfile={setActiveProfile} />
 
       {activeProfile ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "32px" }}>
           
-          {/* Main Grid: Connector + Chart */}
+          {/* Section Connexion et Graphique */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "24px" }}>
             <ScaleConnector activeProfile={activeProfile} onMeasurementSaved={fetchHistory} />
             <BiaChart history={history} />
           </div>
 
-          {/* Last weigh-in analysis */}
+          {/* Section d'affichage des cartes de données */}
           <div>
             <h3 style={{ fontSize: "1.2rem", marginBottom: "16px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "8px" }}>
               <Sparkles size={18} style={{ color: "var(--accent-light)" }} />
-              Dernière analyse corporelle
+              Dernière analyse corporelle complète
             </h3>
 
             {lastMeasurement ? (
@@ -148,14 +184,14 @@ export function App() {
                   unit="kg"
                   icon={<Scale size={20} />}
                   category="primary"
-                  label={`Dernière mesure : ${new Date(lastMeasurement.createdAt).toLocaleDateString("fr-FR")}`}
+                  label={`Pesé le ${new Date(lastMeasurement.createdAt).toLocaleDateString("fr-FR")}`}
                   progress={100}
                 />
 
-                {/* 2. IMC / BMI */}
+                {/* 2. IMC */}
                 {(() => {
-                  const val = parseFloat(lastMeasurement.fatPct || "0"); // juste pour initialiser
-                  const bmi = lastMeasurement.bmr ? (parseFloat(lastMeasurement.weightKg) / Math.pow(activeProfile.heightCm / 100, 2)) : 0;
+                  const weight = parseFloat(lastMeasurement.weightKg);
+                  const bmi = weight / Math.pow(activeProfile.heightCm / 100, 2);
                   const status = getBmiStatus(bmi);
                   return (
                     <MetricCard
@@ -165,12 +201,12 @@ export function App() {
                       icon={<Activity size={20} />}
                       category={status.cat}
                       label={status.label}
-                      progress={(bmi / 40) * 100} // Échelle approximative sur 40
+                      progress={(bmi / 40) * 100}
                     />
                   );
                 })()}
 
-                {/* 3. Masse Grasse % */}
+                {/* 3. Masse Grasse */}
                 {lastMeasurement.fatPct && (() => {
                   const fat = parseFloat(lastMeasurement.fatPct);
                   const status = getFatStatus(fat, activeProfile.gender);
@@ -179,7 +215,7 @@ export function App() {
                       title="Masse Grasse"
                       value={fat.toFixed(1)}
                       unit="%"
-                      icon={<AlertCircle size={20} />}
+                      icon={<ShieldAlert size={20} />}
                       category={status.cat}
                       label={status.label}
                       progress={fat}
@@ -187,7 +223,25 @@ export function App() {
                   );
                 })()}
 
-                {/* 4. Masse Musculaire % */}
+                {/* 4. Masse Sans Graisse (FFM - Fat-Free Mass) */}
+                {lastMeasurement.fatPct && (() => {
+                  const weight = parseFloat(lastMeasurement.weightKg);
+                  const fat = parseFloat(lastMeasurement.fatPct);
+                  const ffmKg = weight - (weight * fat) / 100;
+                  return (
+                    <MetricCard
+                      title="Masse Sans Graisse"
+                      value={ffmKg.toFixed(1)}
+                      unit="kg"
+                      icon={<Dumbbell size={20} />}
+                      category="primary"
+                      label="Masse maigre totale (organes, muscles, os)"
+                      progress={(ffmKg / weight) * 100}
+                    />
+                  );
+                })()}
+
+                {/* 5. Masse Musculaire */}
                 {lastMeasurement.musclePct && (() => {
                   const muscle = parseFloat(lastMeasurement.musclePct);
                   return (
@@ -197,13 +251,13 @@ export function App() {
                       unit="%"
                       icon={<Dumbbell size={20} />}
                       category="success"
-                      label={muscle > 40 ? "Excellente masse musculaire" : "Masse musculaire normale"}
+                      label={muscle > 42 ? "Excellente musculature" : "Musculature normale"}
                       progress={muscle}
                     />
                   );
                 })()}
 
-                {/* 5. Hydratation (Eau) % */}
+                {/* 6. Eau % */}
                 {lastMeasurement.waterPct && (() => {
                   const water = parseFloat(lastMeasurement.waterPct);
                   return (
@@ -213,25 +267,8 @@ export function App() {
                       unit="%"
                       icon={<Droplet size={20} />}
                       category="info"
-                      label={water >= 50 ? "Hydratation équilibrée" : "Hydratation un peu faible"}
+                      label={water >= 50 ? "Hydratation optimale" : "Hydratation insuffisante"}
                       progress={water}
-                    />
-                  );
-                })()}
-
-                {/* 6. Graisse Viscérale */}
-                {lastMeasurement.visceralFat !== null && (() => {
-                  const visceral = lastMeasurement.visceralFat;
-                  const status = getVisceralStatus(visceral);
-                  return (
-                    <MetricCard
-                      title="Graisse Viscérale"
-                      value={visceral}
-                      unit="nv"
-                      icon={<Activity size={20} />}
-                      category={status.cat}
-                      label={status.label}
-                      progress={(visceral / 20) * 100} // Échelle sur 20
                     />
                   );
                 })()}
@@ -246,13 +283,30 @@ export function App() {
                       unit="kg"
                       icon={<Bone size={20} />}
                       category="primary"
-                      label="Densité minérale estimée"
-                      progress={(bone / 5) * 100} // Échelle approximative sur 5kg
+                      label="Masse minérale osseuse estimée"
+                      progress={(bone / 6) * 100}
                     />
                   );
                 })()}
 
-                {/* 8. Métabolisme de Base (BMR) */}
+                {/* 8. Graisse Viscérale */}
+                {lastMeasurement.visceralFat !== null && (() => {
+                  const visceral = lastMeasurement.visceralFat;
+                  const status = getVisceralStatus(visceral);
+                  return (
+                    <MetricCard
+                      title="Graisse Viscérale"
+                      value={visceral}
+                      unit="nv"
+                      icon={<AlertCircle size={20} />}
+                      category={status.cat}
+                      label={status.label}
+                      progress={(visceral / 20) * 100}
+                    />
+                  );
+                })()}
+
+                {/* 9. Métabolisme de Base (BMR) */}
                 {lastMeasurement.bmr && (
                   <MetricCard
                     title="Métabolisme de Base (BMR)"
@@ -260,7 +314,7 @@ export function App() {
                     unit="kcal"
                     icon={<Flame size={20} />}
                     category="warning"
-                    label="Dépense calorique journalière minimale"
+                    label="Besoin métabolique quotidien minimal"
                     progress={100}
                   />
                 )}
