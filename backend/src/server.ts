@@ -6,7 +6,7 @@ import * as dotenv from "dotenv";
 import { authRoutes } from "./modules/auth/authRoutes.js";
 import { profilesRoutes } from "./modules/profiles/profilesRoutes.js";
 import { metricsRoutes } from "./modules/metrics/metricsRoutes.js";
-import { pool } from "./config/db.js";
+import { pool, runMigrations } from "./config/db.js";
 
 dotenv.config();
 
@@ -17,35 +17,35 @@ const server = fastify({
 });
 
 // 1. Configuration CORS
-// Permet au frontend en développement (Vite port 5173) et en production d'accéder aux APIs
 server.register(cors, {
   origin: process.env.CORS_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 });
 
-// 2. Configuration JWT (sécurité renforcée)
+// 2. Configuration JWT
 const jwtSecret = process.env.JWT_SECRET || "balance-super-secret-key-development";
 server.register(jwt, {
   secret: jwtSecret,
 });
 
-// 3. Enregistrement des routes de l'API (Modular Monolith)
+// 3. Enregistrement des routes
 server.register(authRoutes, { prefix: "/api/auth" });
 server.register(profilesRoutes, { prefix: "/api/profiles" });
 server.register(metricsRoutes, { prefix: "/api/metrics" });
 
-// Route publique de santé (Health Check / utile pour AlwaysData)
 server.get("/", async (request, reply) => {
   return { status: "healthy", service: "balance-backend", timestamp: new Date() };
 });
 
-// 4. Gestion de la déconnexion propre (Graceful Shutdown)
+// 4. Graceful Shutdown
 const shutdown = async () => {
   server.log.info("Arrêt progressif du serveur...");
   try {
     await server.close();
-    await pool.end();
+    if (pool) {
+      await pool.end();
+    }
     server.log.info("Serveur et connexions base de données fermés proprement.");
     process.exit(0);
   } catch (err) {
@@ -63,6 +63,9 @@ const start = async () => {
   const host = process.env.HOST || "0.0.0.0";
   
   try {
+    // Exécuter automatiquement les migrations au démarrage (PGlite en local, Postgres en prod)
+    await runMigrations();
+    
     await server.listen({ port, host });
     server.log.info(`Serveur en écoute sur http://${host}:${port}`);
   } catch (err) {
