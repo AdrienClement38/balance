@@ -4,7 +4,6 @@ import AuthForm from "./components/AuthForm.tsx";
 import ProfileList from "./components/ProfileList.tsx";
 import ScaleConnector from "./components/ScaleConnector.tsx";
 import MetricCard from "./components/MetricCard.tsx";
-import BiaChart from "./components/BiaChart.tsx";
 
 import {
   Scale,
@@ -19,7 +18,8 @@ import {
   Sparkles,
   Sun,
   Moon,
-  ShieldAlert
+  ShieldAlert,
+  Info
 } from "lucide-react";
 
 export function App() {
@@ -92,12 +92,12 @@ export function App() {
 
   const getFatStatus = (fatPct: number, gender: string) => {
     if (gender === "male") {
-      if (fatPct < 10) return { label: "Masse grasse très faible", cat: "warning" as const };
+      if (fatPct < 10) return { label: "Taux très faible", cat: "warning" as const };
       if (fatPct < 20) return { label: "Taux sain (Idéal)", cat: "success" as const };
       if (fatPct < 25) return { label: "Moyen", cat: "warning" as const };
       return { label: "Excès de gras", cat: "danger" as const };
     } else {
-      if (fatPct < 18) return { label: "Masse grasse très faible", cat: "warning" as const };
+      if (fatPct < 18) return { label: "Taux très faible", cat: "warning" as const };
       if (fatPct < 28) return { label: "Taux sain (Idéal)", cat: "success" as const };
       if (fatPct < 33) return { label: "Moyen", cat: "warning" as const };
       return { label: "Excès de gras", cat: "danger" as const };
@@ -109,6 +109,39 @@ export function App() {
     if (level <= 14) return { label: "Élevé (Prudence)", cat: "warning" as const };
     return { label: "Très élevé (Risque cardio)", cat: "danger" as const };
   };
+
+  // Fonction utilitaire pour calculer l'âge
+  const getAge = (birthdateStr: string) => {
+    const birthdate = new Date(birthdateStr);
+    const today = new Date();
+    let age = today.getFullYear() - birthdate.getFullYear();
+    const monthDiff = today.getMonth() - birthdate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthdate.getDate())) {
+      age--;
+    }
+    return age;
+  };
+
+  // Extraire les valeurs historiques chronologiques (du plus ancien au plus récent)
+  const chronHistory = [...history].reverse();
+
+  // Mappings historiques pour les mini-graphiques
+  const weightHistory = chronHistory.map(m => parseFloat(m.weightKg));
+  const bmiHistory = chronHistory.map(m => {
+    const w = parseFloat(m.weightKg);
+    return w / Math.pow((activeProfile?.heightCm || 175) / 100, 2);
+  });
+  const fatHistory = chronHistory.map(m => m.fatPct ? parseFloat(m.fatPct) : 0);
+  const ffmHistory = chronHistory.map(m => {
+    const w = parseFloat(m.weightKg);
+    const f = m.fatPct ? parseFloat(m.fatPct) : 0;
+    return w - (w * f) / 100;
+  });
+  const muscleHistory = chronHistory.map(m => m.musclePct ? parseFloat(m.musclePct) : 0);
+  const waterHistory = chronHistory.map(m => m.waterPct ? parseFloat(m.waterPct) : 0);
+  const boneHistory = chronHistory.map(m => m.boneMassKg ? parseFloat(m.boneMassKg) : 0);
+  const visceralHistory = chronHistory.map(m => m.visceralFat || 0);
+  const bmrHistory = chronHistory.map(m => m.bmr || 0);
 
   if (!isAuthenticated) {
     return <AuthForm onAuthSuccess={handleAuthSuccess} />;
@@ -131,7 +164,6 @@ export function App() {
         </div>
         
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {/* Bouton de Toggle de Thème */}
           <button
             onClick={toggleTheme}
             className="btn btn-secondary"
@@ -161,17 +193,60 @@ export function App() {
       {activeProfile ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "32px" }}>
           
-          {/* Section Connexion et Graphique */}
+          {/* Section Haute : Contrôleur Bluetooth + Résumé Profil */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "24px" }}>
+            
             <ScaleConnector activeProfile={activeProfile} onMeasurementSaved={fetchHistory} />
-            <BiaChart history={history} />
+            
+            <div className="glass-panel" style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+              <div>
+                <h3 style={{ fontSize: "1.1rem", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Sparkles size={18} style={{ color: "var(--accent-light)" }} />
+                  Synthèse du profil
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "20px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--glass-border)", paddingBottom: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Prénom</span>
+                    <span style={{ fontWeight: 600 }}>{activeProfile.name}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--glass-border)", paddingBottom: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Genre</span>
+                    <span style={{ fontWeight: 600 }}>{activeProfile.gender === "male" ? "Homme" : "Femme"}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--glass-border)", paddingBottom: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Âge</span>
+                    <span style={{ fontWeight: 600 }}>{getAge(activeProfile.birthdate)} ans</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", paddingBottom: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Taille</span>
+                    <span style={{ fontWeight: 600 }}>{activeProfile.heightCm} cm</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div style={{ 
+                background: "rgba(99, 102, 241, 0.05)", 
+                border: "1px solid rgba(99, 102, 241, 0.15)", 
+                borderRadius: "var(--radius-sm)", 
+                padding: "12px 16px", 
+                fontSize: "0.85rem", 
+                color: "var(--text-secondary)",
+                display: "flex",
+                gap: "8px",
+                alignItems: "center"
+              }}>
+                <Info size={16} style={{ color: "var(--accent-light)", flexShrink: 0 }} />
+                <span>Sélectionnez ou créez un profil ci-dessus avant de démarrer une pesée.</span>
+              </div>
+            </div>
+
           </div>
 
-          {/* Section d'affichage des cartes de données */}
+          {/* Section d'affichage des cartes de données avec mini-graphique (Sparkline) par carte */}
           <div>
             <h3 style={{ fontSize: "1.2rem", marginBottom: "16px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "8px" }}>
               <Sparkles size={18} style={{ color: "var(--accent-light)" }} />
-              Dernière analyse corporelle complète
+              Analyse corporelle historique par métrique
             </h3>
 
             {lastMeasurement ? (
@@ -184,8 +259,9 @@ export function App() {
                   unit="kg"
                   icon={<Scale size={20} />}
                   category="primary"
-                  label={`Pesé le ${new Date(lastMeasurement.createdAt).toLocaleDateString("fr-FR")}`}
+                  label={`Dernier : ${new Date(lastMeasurement.createdAt).toLocaleDateString("fr-FR")}`}
                   progress={100}
+                  historyValues={weightHistory}
                 />
 
                 {/* 2. IMC */}
@@ -202,6 +278,7 @@ export function App() {
                       category={status.cat}
                       label={status.label}
                       progress={(bmi / 40) * 100}
+                      historyValues={bmiHistory}
                     />
                   );
                 })()}
@@ -219,11 +296,12 @@ export function App() {
                       category={status.cat}
                       label={status.label}
                       progress={fat}
+                      historyValues={fatHistory}
                     />
                   );
                 })()}
 
-                {/* 4. Masse Sans Graisse (FFM - Fat-Free Mass) */}
+                {/* 4. Masse Sans Graisse (FFM) */}
                 {lastMeasurement.fatPct && (() => {
                   const weight = parseFloat(lastMeasurement.weightKg);
                   const fat = parseFloat(lastMeasurement.fatPct);
@@ -235,8 +313,9 @@ export function App() {
                       unit="kg"
                       icon={<Dumbbell size={20} />}
                       category="primary"
-                      label="Masse maigre totale (organes, muscles, os)"
+                      label="Masse maigre brute totale"
                       progress={(ffmKg / weight) * 100}
+                      historyValues={ffmHistory}
                     />
                   );
                 })()}
@@ -253,6 +332,7 @@ export function App() {
                       category="success"
                       label={muscle > 42 ? "Excellente musculature" : "Musculature normale"}
                       progress={muscle}
+                      historyValues={muscleHistory}
                     />
                   );
                 })()}
@@ -269,6 +349,7 @@ export function App() {
                       category="info"
                       label={water >= 50 ? "Hydratation optimale" : "Hydratation insuffisante"}
                       progress={water}
+                      historyValues={waterHistory}
                     />
                   );
                 })()}
@@ -283,8 +364,9 @@ export function App() {
                       unit="kg"
                       icon={<Bone size={20} />}
                       category="primary"
-                      label="Masse minérale osseuse estimée"
+                      label="Masse osseuse estimée"
                       progress={(bone / 6) * 100}
+                      historyValues={boneHistory}
                     />
                   );
                 })()}
@@ -302,6 +384,7 @@ export function App() {
                       category={status.cat}
                       label={status.label}
                       progress={(visceral / 20) * 100}
+                      historyValues={visceralHistory}
                     />
                   );
                 })()}
@@ -314,8 +397,9 @@ export function App() {
                     unit="kcal"
                     icon={<Flame size={20} />}
                     category="warning"
-                    label="Besoin métabolique quotidien minimal"
+                    label="Besoin métabolique quotidien"
                     progress={100}
+                    historyValues={bmrHistory}
                   />
                 )}
 
