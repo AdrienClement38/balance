@@ -4,12 +4,13 @@ import { db } from "../../config/db.js";
 import { measurements, profiles } from "../../db/schema.js";
 import { and, desc, eq } from "drizzle-orm";
 import { calculateBia } from "../bia/biaCalculator.js";
+import { broadcastToUser } from "../../config/websocket.js";
 
 // Input validation
 export const createMeasurementSchema = z.object({
   profileId: z.string().uuid("ID de profil invalide"),
   weightKg: z.number().min(5, "Poids minimal : 5kg").max(200, "Poids maximal : 200kg"),
-  impedanceOhms: z.number().int().min(0).max(2000), // 0 veut dire que l'impédance n'a pas pu être mesurée
+  impedanceOhms: z.number().int().min(0).max(2000), // 0 = non mesuré
 });
 
 export type CreateMeasurementInput = z.infer<typeof createMeasurementSchema>;
@@ -53,7 +54,7 @@ export async function createMeasurementHandler(
       .insert(measurements)
       .values({
         profileId,
-        weightKg: weightKg.toString(), // Stocké en decimal
+        weightKg: weightKg.toString(),
         impedanceOhms,
         fatPct: bia.fatPct.toString(),
         musclePct: bia.musclePct.toString(),
@@ -63,6 +64,9 @@ export async function createMeasurementHandler(
         visceralFat: bia.visceralFat,
       })
       .returning();
+
+    // 5. Diffuser instantanément la pesée à tous les onglets/clients connectés de cet utilisateur
+    broadcastToUser(userId, "new_measurement", newMeasurement);
 
     return reply.status(201).send(newMeasurement);
   } catch (error) {
@@ -105,7 +109,7 @@ export async function getMeasurementsHandler(
       });
     }
 
-    // 2. Récupérer l'historique trié par date décroissante (les index optimisent cette requête)
+    // 2. Récupérer l'historique trié par date décroissante
     const history = await db
       .select()
       .from(measurements)
@@ -123,7 +127,6 @@ export async function getMeasurementsHandler(
   }
 }
 
-// Fonction utilitaire pour calculer l'âge
 function calculateAge(birthdateStr: string): number {
   const birthdate = new Date(birthdateStr);
   const today = new Date();

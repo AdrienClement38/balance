@@ -62,6 +62,72 @@ export function App() {
     fetchHistory();
   }, [activeProfile]);
 
+  // Établir la connexion WebSocket en temps réel pour recevoir les nouvelles pesées instantanément
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const wsUrl = import.meta.env.VITE_WS_URL || "ws://localhost:3005/ws";
+    let socket: WebSocket | null = null;
+    let reconnectTimeout: number;
+
+    const connectWs = () => {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log("WebSocket connecté.");
+        const token = localStorage.getItem("balance_jwt_token");
+        if (token) {
+          socket?.send(JSON.stringify({ type: "auth", token }));
+        }
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          
+          if (parsed.type === "new_measurement" && parsed.data) {
+            const newMetric = parsed.data as Measurement;
+            
+            // Si la pesée correspond au profil actif, on l'insère à l'historique de manière réactive
+            if (activeProfile && newMetric.profileId === activeProfile.id) {
+              setHistory((prev) => {
+                // Éviter d'ajouter un doublon si l'appel API direct l'a déjà mis
+                if (prev.some((m) => m.id === newMetric.id)) {
+                  return prev;
+                }
+                return [newMetric, ...prev];
+              });
+            }
+          }
+        } catch (err) {
+          console.error("Erreur décodage message WebSocket :", err);
+        }
+      };
+
+      socket.onclose = () => {
+        console.log("WebSocket déconnecté, tentative de reconnexion dans 5 secondes...");
+        reconnectTimeout = window.setTimeout(connectWs, 5000);
+      };
+
+      socket.onerror = (err) => {
+        console.error("Erreur de socket :", err);
+        socket?.close();
+      };
+    };
+
+    connectWs();
+
+    // Nettoyer la socket au démontage du composant
+    return () => {
+      if (socket) {
+        // Supprimer le callback onclose pour éviter une boucle infinie de reconnexion
+        socket.onclose = null;
+        socket.close();
+      }
+      clearTimeout(reconnectTimeout);
+    };
+  }, [isAuthenticated, activeProfile]);
+
   const handleAuthSuccess = () => {
     setIsAuthenticated(true);
     setCurrentUser(api.auth.getCurrentUser());
@@ -246,7 +312,7 @@ export function App() {
           <div>
             <h3 style={{ fontSize: "1.2rem", marginBottom: "16px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "8px" }}>
               <Sparkles size={18} style={{ color: "var(--accent-light)" }} />
-              Analyse corporelle historique par métrique
+              Analyse corporelle historique par métrique (Temps Réel Actif)
             </h3>
 
             {lastMeasurement ? (

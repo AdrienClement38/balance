@@ -7,6 +7,7 @@ import { authRoutes } from "./modules/auth/authRoutes.js";
 import { profilesRoutes } from "./modules/profiles/profilesRoutes.js";
 import { metricsRoutes } from "./modules/metrics/metricsRoutes.js";
 import { pool, runMigrations } from "./config/db.js";
+import { registerWebSocket } from "./config/websocket.js";
 
 dotenv.config();
 
@@ -29,7 +30,10 @@ server.register(jwt, {
   secret: jwtSecret,
 });
 
-// 3. Enregistrement des routes
+// Enregistrement de la gestion des WebSockets
+registerWebSocket(server);
+
+// 3. Enregistrement des routes de l'API (Modular Monolith)
 server.register(authRoutes, { prefix: "/api/auth" });
 server.register(profilesRoutes, { prefix: "/api/profiles" });
 server.register(metricsRoutes, { prefix: "/api/metrics" });
@@ -38,7 +42,7 @@ server.get("/", async (request, reply) => {
   return { status: "healthy", service: "balance-backend", timestamp: new Date() };
 });
 
-// 4. Graceful Shutdown
+// 4. Gestion de la déconnexion propre (Graceful Shutdown)
 const shutdown = async () => {
   server.log.info("Arrêt progressif du serveur...");
   try {
@@ -63,9 +67,7 @@ const start = async () => {
   const host = process.env.HOST || "0.0.0.0";
   
   try {
-    // Exécuter automatiquement les migrations au démarrage (PGlite en local, Postgres en prod)
     await runMigrations();
-    
     await server.listen({ port, host });
     server.log.info(`Serveur en écoute sur http://${host}:${port}`);
   } catch (err) {
