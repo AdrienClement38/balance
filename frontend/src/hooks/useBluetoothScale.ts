@@ -53,8 +53,13 @@ export function useBluetoothScale() {
       // 1. Tenter de récupérer un appareil déjà autorisé dans le passé (getDevices)
       if (nav.bluetooth.getDevices) {
         const permittedDevices = await nav.bluetooth.getDevices();
+        // Recherche d'un appareil qui commence par QN, Fit, Dara ou Yolanda
         const existingScale = permittedDevices.find(
-          (d: any) => d.name?.startsWith("QN-Scale") || d.name?.startsWith("QNScale")
+          (d: any) => 
+            d.name?.startsWith("QN-Scale") || 
+            d.name?.startsWith("QNScale") ||
+            d.name?.toLowerCase().includes("track") ||
+            d.name?.toLowerCase().includes("dara")
         );
 
         if (existingScale) {
@@ -66,12 +71,10 @@ export function useBluetoothScale() {
       // 2. Si aucun appareil n'a été pré-autorisé, on demande à l'utilisateur via le pop-up
       if (!device) {
         console.log("Aucun appareil pré-autorisé trouvé, ouverture du sélecteur...");
+        // acceptAllDevices: true est le filtre le plus robuste : il affiche tous les appareils détectés
+        // pour vous laisser choisir votre balance sans dépendre d'un nom de diffusion strict.
         device = await nav.bluetooth.requestDevice({
-          filters: [
-            { namePrefix: "QN-Scale" },
-            { namePrefix: "QNScale" },
-            { services: [0xffe0] }
-          ],
+          acceptAllDevices: true,
           optionalServices: [0xffe0]
         });
       }
