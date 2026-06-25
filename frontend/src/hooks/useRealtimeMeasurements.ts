@@ -27,7 +27,11 @@ export function useRealtimeMeasurements(
   useEffect(() => {
     if (!enabled) return;
 
-    const wsUrl = import.meta.env.VITE_WS_URL || "ws://localhost:3006/ws";
+    // URL WebSocket relative à l'origine courante (même serveur que le frontend).
+    // En dev, le proxy Vite redirige /ws vers :3006. wss:// automatiquement en HTTPS.
+    const wsUrl =
+      import.meta.env.VITE_WS_URL ||
+      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     let socket: WebSocket | null = null;
     let reconnectTimeout: number;
     let closedByCleanup = false;

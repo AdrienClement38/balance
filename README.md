@@ -68,10 +68,12 @@ Les migrations de base de données sont appliquées automatiquement au démarrag
 
 ```bash
 cd frontend
-cp .env.example .env        # VITE_API_URL et VITE_WS_URL pointent sur le backend
 npm install
 npm run dev                 # PWA sur http://localhost:5173
 ```
+
+> Pas de `.env` à créer côté frontend : il appelle l'API/WebSocket en URLs **relatives**
+> (`/api`, `/ws`), et le proxy Vite les redirige vers le backend (port 3006) en dev.
 
 > 📱 Le serveur de dev écoute sur `0.0.0.0`, ce qui permet d'ouvrir l'app depuis un
 > smartphone sur le même réseau Wi-Fi. **Attention** : la Web Bluetooth exige le HTTPS
@@ -86,22 +88,32 @@ npm run dev                 # PWA sur http://localhost:5173
 | Backend  | `PORT` / `HOST` | Port et hôte d'écoute (par défaut `3006` / `0.0.0.0`)             |
 | Backend  | `DATABASE_URL`  | Connexion PostgreSQL — **requise en production**                  |
 | Backend  | `JWT_SECRET`    | Secret de signature JWT — **obligatoire en production**           |
-| Backend  | `CORS_ORIGIN`   | Origine autorisée (URL du frontend) — à définir en production     |
-| Frontend | `VITE_API_URL`  | URL de l'API REST (suffixe `/api` inclus)                         |
-| Frontend | `VITE_WS_URL`   | URL du WebSocket temps réel (même port que le backend)            |
+| Backend  | `CORS_ORIGIN`   | Optionnel — seulement si le frontend est sur une autre origine    |
+| Frontend | `VITE_API_URL`  | Optionnel — défaut relatif `/api` (même origine)                  |
+| Frontend | `VITE_WS_URL`   | Optionnel — défaut relatif `/ws` (même origine)                   |
 
-### 4. Déploiement (production)
+### 4. Déploiement (production — « 1 seul site »)
+
+En production, le **backend sert aussi le frontend** : un seul serveur Node.js, un seul
+domaine, pas de CORS, et un seul HTTPS (indispensable au Web Bluetooth).
 
 ```bash
-# Backend (ex. AlwaysData)
-cd backend && npm install && npm run build && NODE_ENV=production npm start
+# 1. Builder le frontend (génère frontend/dist, que le backend va servir)
+cd frontend && npm install && npm run build
 
-# Frontend : build statique à servir derrière HTTPS
-cd frontend && npm install && npm run build   # génère dist/
+# 2. Builder puis lancer le backend (sert l'API, le WebSocket ET le frontend)
+cd ../backend && npm install && npm run build
+NODE_ENV=production node dist/server.js
 ```
 
-En production, le serveur **refuse de démarrer** si `JWT_SECRET` n'est pas défini, et
-avertit dans les logs si `CORS_ORIGIN` est laissé ouvert (`*`).
+Le backend détecte `frontend/dist` et le sert sur `/` ; l'API reste sous `/api`, le
+WebSocket sous `/ws`, la santé sous `/healthz`. Le serveur **refuse de démarrer** si
+`JWT_SECRET` n'est pas défini en production. Les migrations s'appliquent automatiquement.
+
+**Sur AlwaysData** : créez une base PostgreSQL, puis **un seul site Node.js** (commande
+`node dist/server.js`, répertoire de travail `backend/`, HTTPS activé). Le serveur écoute
+automatiquement sur `ALWAYSDATA_HTTPD_IP/PORT`. Variables : `NODE_ENV=production`,
+`DATABASE_URL`, `JWT_SECRET`.
 
 > ⚠️ **Avertissement santé** : les valeurs de composition corporelle sont estimées par
 > des formules empiriques de bio-impédance (BIA) et ne constituent pas un diagnostic

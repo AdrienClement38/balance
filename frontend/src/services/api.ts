@@ -1,4 +1,7 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3006/api";
+// Par défaut on utilise une URL RELATIVE (/api) : le frontend et l'API sont servis
+// par le même serveur (1 seul site). En dev, le proxy Vite redirige /api vers :3006.
+// VITE_API_URL reste possible si l'API est hébergée sur une autre origine.
+const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 
 export interface User {
   id: string;

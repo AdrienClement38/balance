@@ -68,5 +68,12 @@ export default defineConfig({
   server: {
     port: 5173,
     host: "0.0.0.0", // Permet d'accéder au serveur de dev depuis un smartphone connecté sur le même réseau WiFi
+    // En dev, on redirige les appels relatifs /api et /ws vers le backend (port 3006),
+    // pour que le même code (URLs relatives) fonctionne en dev comme en production "1 seul site".
+    proxy: {
+      // 127.0.0.1 (et non localhost) pour forcer l'IPv4 et éviter ECONNREFUSED sur ::1.
+      "/api": { target: "http://127.0.0.1:3006", changeOrigin: true },
+      "/ws": { target: "http://127.0.0.1:3006", ws: true },
+    },
   },
 });

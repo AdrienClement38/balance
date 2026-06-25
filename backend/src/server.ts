@@ -2,7 +2,11 @@ import fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
 import * as dotenv from "dotenv";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 import { authRoutes } from "./modules/auth/authRoutes.js";
 import { profilesRoutes } from "./modules/profiles/profilesRoutes.js";
@@ -11,6 +15,9 @@ import { pool, runMigrations } from "./config/db.js";
 import { registerWebSocket } from "./config/websocket.js";
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -43,9 +50,10 @@ server.register(jwt, {
   secret: jwtSecret,
 });
 
-// 2b. Limitation du débit global (protection anti-abus et anti-brute-force)
+// 2b. Limitation du débit global (protection anti-abus et anti-brute-force).
+// Marge suffisante car le backend sert aussi les fichiers statiques du frontend.
 server.register(rateLimit, {
-  max: 100,
+  max: 300,
   timeWindow: "1 minute",
 });
 
@@ -57,9 +65,35 @@ server.register(authRoutes, { prefix: "/api/auth" });
 server.register(profilesRoutes, { prefix: "/api/profiles" });
 server.register(metricsRoutes, { prefix: "/api/metrics" });
 
-server.get("/", async (request, reply) => {
+// Endpoint de santé (sur /healthz pour laisser "/" au frontend).
+server.get("/healthz", async () => {
   return { status: "healthy", service: "balance-backend", timestamp: new Date() };
 });
+
+// 3b. Mode « 1 seul site » : si le frontend a été buildé, le backend le sert lui-même.
+// API + WebSocket + frontend sur le même domaine => pas de CORS, et un seul HTTPS
+// (indispensable au Web Bluetooth). En l'absence de build, on reste en mode API seule.
+const frontendDist = process.env.FRONTEND_DIST
+  ? path.resolve(process.env.FRONTEND_DIST)
+  : path.join(__dirname, "../../frontend/dist");
+
+if (fs.existsSync(path.join(frontendDist, "index.html"))) {
+  server.register(fastifyStatic, { root: frontendDist });
+  // Repli SPA : toute route GET inconnue (hors /api et /ws) renvoie index.html.
+  server.setNotFoundHandler((request, reply) => {
+    const url = request.raw.url || "";
+    if (request.method !== "GET" || url.startsWith("/api") || url.startsWith("/ws")) {
+      reply.status(404).send({ error: "Not Found", message: "Ressource introuvable." });
+      return;
+    }
+    reply.sendFile("index.html");
+  });
+  server.log.info(`Frontend servi depuis ${frontendDist} (mode 1 seul site).`);
+} else {
+  server.get("/", async () => {
+    return { status: "healthy", service: "balance-backend", frontend: "non buildé (mode API seule)" };
+  });
+}
 
 // 4. Gestion de la déconnexion propre (Graceful Shutdown)
 const shutdown = async () => {
