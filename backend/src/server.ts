@@ -116,10 +116,11 @@ process.on("SIGTERM", shutdown);
 
 // 5. Lancement du serveur
 const start = async () => {
-  // AlwaysData impose d'écouter sur ALWAYSDATA_HTTPD_IP / ALWAYSDATA_HTTPD_PORT.
-  // On les prend en priorité après PORT/HOST explicites, sinon défaut local 3006.
+  // AlwaysData fournit l'IP (IPv6) et le port d'écoute via les variables IP / PORT.
+  // On les prend en priorité après HOST/PORT explicites, sinon défaut local 3006.
   const port = parseInt(process.env.PORT || process.env.ALWAYSDATA_HTTPD_PORT || "3006", 10);
-  const host = process.env.HOST || process.env.ALWAYSDATA_HTTPD_IP || "0.0.0.0";
+  const host =
+    process.env.HOST || process.env.IP || process.env.ALWAYSDATA_HTTPD_IP || "0.0.0.0";
   
   try {
     await runMigrations();
