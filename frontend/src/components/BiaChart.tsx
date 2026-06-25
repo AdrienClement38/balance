@@ -11,6 +11,8 @@ type MetricType = "weight" | "fat" | "ffm" | "muscle" | "water" | "bone" | "visc
 
 export function BiaChart({ history }: BiaChartProps) {
   const [metric, setMetric] = useState<MetricType>("weight");
+  // Point survolé/appuyé : affiche une infobulle (date + valeur) pour consulter l'historique.
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
 
   if (history.length === 0) {
     return (
@@ -65,8 +67,19 @@ export function BiaChart({ history }: BiaChartProps) {
   const points = sortedData.map((d, index) => {
     const x = padding + (index / (sortedData.length - 1 || 1)) * (width - padding * 2);
     const y = height - padding - ((getVal(d) - minVal) / valRange) * (height - padding * 2);
-    return { x, y, val: getVal(d), date: new Date(d.createdAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) };
+    const dd = new Date(d.createdAt);
+    return {
+      x,
+      y,
+      val: getVal(d),
+      date: dd.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }),
+      // Date + heure complètes pour l'infobulle (distingue plusieurs pesées le même jour).
+      dateTime: dd.toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }),
+    };
   });
+
+  const decimals = metric === "weight" || metric === "ffm" || metric === "bone" ? 1 : 0;
+  const unit = ({ weight: "kg", fat: "%", ffm: "kg", muscle: "%", water: "%", bone: "kg", visceral: "", bmr: "kcal" } as Record<MetricType, string>)[metric];
 
   let linePath = "";
   let areaPath = "";
@@ -184,44 +197,93 @@ export function BiaChart({ history }: BiaChartProps) {
             </>
           )}
 
-          {/* Cercles de données */}
-          {points.map((p, i) => (
-            <g key={i}>
-              <circle
-                cx={p.x}
-                cy={p.y}
-                r="5"
-                fill="var(--bg-primary)"
-                stroke="var(--accent)"
-                strokeWidth="3"
-                style={{ cursor: "pointer" }}
-              />
-              <text
-                x={p.x}
-                y={p.y - 12}
-                fill="var(--text-primary)"
-                fontSize="9"
-                fontWeight="700"
-                textAnchor="middle"
-                fontFamily="var(--font-sans)"
-              >
-                {p.val.toFixed(metric === "weight" || metric === "ffm" || metric === "bone" ? 1 : 0)}
-              </text>
-              {(points.length < 6 || i % Math.ceil(points.length / 5) === 0 || i === points.length - 1) && (
-                <text
-                  x={p.x}
-                  y={height - padding + 18}
-                  fill="var(--text-muted)"
-                  fontSize="10"
-                  fontWeight="500"
-                  textAnchor="middle"
-                  fontFamily="var(--font-sans)"
-                >
-                  {p.date}
+          {/* Cercles de données + zone de capture pour le survol / l'appui */}
+          {points.map((p, i) => {
+            const active = activeIdx === i;
+            const showAxisDate =
+              points.length < 6 || i % Math.ceil(points.length / 5) === 0 || i === points.length - 1;
+            return (
+              <g key={i}>
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={active ? 7 : 5}
+                  fill="var(--bg-primary)"
+                  stroke="var(--accent)"
+                  strokeWidth="3"
+                />
+                {/* Valeur au-dessus du point (masquée quand l'infobulle est ouverte) */}
+                {!active && (
+                  <text
+                    x={p.x}
+                    y={p.y - 12}
+                    fill="var(--text-primary)"
+                    fontSize="9"
+                    fontWeight="700"
+                    textAnchor="middle"
+                    fontFamily="var(--font-sans)"
+                  >
+                    {p.val.toFixed(decimals)}
+                  </text>
+                )}
+                {showAxisDate && (
+                  <text
+                    x={p.x}
+                    y={height - padding + 18}
+                    fill="var(--text-muted)"
+                    fontSize="10"
+                    fontWeight="500"
+                    textAnchor="middle"
+                    fontFamily="var(--font-sans)"
+                  >
+                    {p.date}
+                  </text>
+                )}
+                {/* Cible élargie : survol (desktop) et appui (mobile) */}
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={16}
+                  fill="transparent"
+                  style={{ cursor: "pointer" }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  onMouseLeave={() => setActiveIdx(null)}
+                  onTouchStart={() => setActiveIdx(i)}
+                  onTouchEnd={() => setActiveIdx(null)}
+                />
+              </g>
+            );
+          })}
+
+          {/* Infobulle du point actif (date + valeur) */}
+          {activeIdx !== null && points[activeIdx] && (() => {
+            const p = points[activeIdx];
+            const valStr = `${p.val.toFixed(decimals)}${unit ? " " + unit : ""}`;
+            const tw = Math.max(96, Math.max(p.dateTime.length, valStr.length) * 6.2 + 16);
+            const tx = Math.max(padding, Math.min(width - padding - tw, p.x - tw / 2));
+            const ty = Math.max(2, p.y - 50);
+            return (
+              <g pointerEvents="none">
+                <rect
+                  x={tx}
+                  y={ty}
+                  width={tw}
+                  height={34}
+                  rx={7}
+                  fill="var(--bg-primary)"
+                  stroke="var(--accent)"
+                  strokeWidth="1.5"
+                  opacity="0.98"
+                />
+                <text x={tx + tw / 2} y={ty + 14} fill="var(--text-muted)" fontSize="9" textAnchor="middle" fontFamily="var(--font-sans)">
+                  {p.dateTime}
                 </text>
-              )}
-            </g>
-          ))}
+                <text x={tx + tw / 2} y={ty + 27} fill="var(--text-primary)" fontSize="12" fontWeight="800" textAnchor="middle" fontFamily="var(--font-sans)">
+                  {valStr}
+                </text>
+              </g>
+            );
+          })()}
         </svg>
       </div>
     </div>

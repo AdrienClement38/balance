@@ -31,27 +31,51 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
 
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Statut de l'enregistrement de la pesée (distinct de l'état de la connexion).
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [retryNonce, setRetryNonce] = useState(0); // incrémenté pour relancer une sauvegarde
 
-  // Déclencher l'enregistrement API lorsque la mesure finale est reçue
+  // Enregistrement de la mesure finale, avec PLUSIEURS tentatives : l'important est que
+  // la pesée aille jusqu'au bout (on préfère la fiabilité à la vitesse).
   useEffect(() => {
-    if (connectionState === "completed" && finalMeasurement) {
-      const saveMeasurement = async () => {
+    if (connectionState !== "completed" || !finalMeasurement) {
+      setSaveStatus("idle");
+      return;
+    }
+
+    let cancelled = false;
+    const MAX_ATTEMPTS = 6;
+
+    (async () => {
+      setSaveStatus("saving");
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           await api.metrics.create({
             profileId: activeProfile.id,
             weightKg: finalMeasurement.weightKg,
             impedanceOhms: finalMeasurement.impedanceOhms,
           });
-          // Alerter le parent pour rafraîchir les graphiques
-          onMeasurementSaved();
+          if (cancelled) return;
+          setSaveStatus("saved");
+          onMeasurementSaved(); // rafraîchit l'historique / les graphiques
+          return;
         } catch (err) {
-          console.error("Erreur lors de la sauvegarde de la mesure :", err);
+          console.error(`Sauvegarde de la pesée — tentative ${attempt}/${MAX_ATTEMPTS} échouée :`, err);
+          if (cancelled) return;
+          // Backoff progressif (1s, 2s, 3s, 4s, 5s) avant la tentative suivante.
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, attempt * 1000));
+            if (cancelled) return;
+          }
         }
-      };
+      }
+      if (!cancelled) setSaveStatus("error");
+    })();
 
-      saveMeasurement();
-    }
-  }, [connectionState, finalMeasurement, activeProfile.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState, finalMeasurement, activeProfile.id, retryNonce]);
 
   const copyLog = async () => {
     const text = frameLog
@@ -81,7 +105,11 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
       case "measuring_impedance":
         return "Analyse de la masse corporelle...";
       case "completed":
-        return "Pesée enregistrée !";
+        return saveStatus === "saved"
+          ? "Pesée enregistrée !"
+          : saveStatus === "error"
+            ? "Échec de l'enregistrement"
+            : "Enregistrement en cours...";
       case "error":
         return "Erreur de connexion";
       default:
@@ -92,7 +120,11 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
   const getStatusColor = () => {
     switch (connectionState) {
       case "completed":
-        return "var(--success)";
+        return saveStatus === "error"
+          ? "var(--danger)"
+          : saveStatus === "saved"
+            ? "var(--success)"
+            : "var(--accent)";
       case "error":
         return "var(--danger)";
       case "disconnected":
@@ -107,9 +139,9 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
         <h3 style={{ fontSize: "1.1rem" }}>Connexion Balance</h3>
         <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", color: getStatusColor() }}>
-          {connectionState === "completed" ? (
+          {connectionState === "completed" && saveStatus === "saved" ? (
             <CheckCircle size={14} />
-          ) : connectionState === "error" ? (
+          ) : connectionState === "error" || (connectionState === "completed" && saveStatus === "error") ? (
             <AlertTriangle size={14} />
           ) : connectionState !== "disconnected" ? (
             <RefreshCw size={14} className="pulse-glow" style={{ animation: "pulse 1.5s infinite linear" }} />
@@ -177,6 +209,31 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
           }}
         >
           {errorMsg}
+        </div>
+      )}
+
+      {connectionState === "completed" && saveStatus === "error" && (
+        <div
+          style={{
+            background: "rgba(244, 63, 94, 0.1)",
+            border: "1px solid rgba(244, 63, 94, 0.2)",
+            borderRadius: "var(--radius-sm)",
+            padding: "12px",
+            marginBottom: "16px",
+          }}
+        >
+          <p style={{ color: "var(--danger)", fontSize: "0.85rem", marginBottom: "10px" }}>
+            La pesée ({finalMeasurement?.weightKg.toFixed(1)} kg) n'a pas pu être enregistrée
+            (réseau ?). Elle n'est pas perdue — réessayez.
+          </p>
+          <button
+            onClick={() => setRetryNonce((n) => n + 1)}
+            className="btn btn-primary"
+            style={{ width: "100%", height: "40px" }}
+          >
+            <RefreshCw size={16} />
+            <span>Réessayer l'enregistrement</span>
+          </button>
         </div>
       )}
 
