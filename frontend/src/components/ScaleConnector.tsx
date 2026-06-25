@@ -1,7 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useBluetoothScale } from "../hooks/useBluetoothScale.ts";
 import api, { Profile } from "../services/api.ts";
-import { Bluetooth, RefreshCw, CheckCircle, Wifi, AlertTriangle } from "lucide-react";
+import {
+  Bluetooth,
+  RefreshCw,
+  CheckCircle,
+  Wifi,
+  AlertTriangle,
+  Activity,
+  Terminal,
+  Copy,
+} from "lucide-react";
 
 interface ScaleConnectorProps {
   activeProfile: Profile;
@@ -13,10 +22,15 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
     connectionState,
     errorMsg,
     currentWeight,
+    currentImpedance,
     finalMeasurement,
+    frameLog,
     connect,
     disconnect,
   } = useBluetoothScale();
+
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Déclencher l'enregistrement API lorsque la mesure finale est reçue
   useEffect(() => {
@@ -38,6 +52,19 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
       saveMeasurement();
     }
   }, [connectionState, finalMeasurement, activeProfile.id]);
+
+  const copyLog = async () => {
+    const text = frameLog
+      .map((f) => `${f.ms}ms\t${f.hex}\t${f.note}${f.checksumOk === false ? "  [checksum KO]" : ""}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text || "(aucune trame)");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard indisponible (hors HTTPS) — on ignore silencieusement
+    }
+  };
 
   const getStatusText = () => {
     switch (connectionState) {
@@ -117,6 +144,24 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
             kg
           </span>
         </div>
+
+        {/* Impédance mesurée (preuve que la bio-impédance est bien captée) */}
+        {currentImpedance > 0 && (
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              marginTop: "16px",
+              fontSize: "0.85rem",
+              color: "var(--accent-light)",
+              fontWeight: 600,
+            }}
+          >
+            <Activity size={14} />
+            <span>Impédance : {currentImpedance} Ω</span>
+          </div>
+        )}
       </div>
 
       {errorMsg && (
@@ -144,6 +189,63 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
         <button onClick={disconnect} className="btn btn-secondary" style={{ width: "100%", height: "46px" }}>
           <span>Annuler la connexion</span>
         </button>
+      )}
+
+      {/* Journal de diagnostic des trames brutes (pour caler le protocole sur le matériel réel) */}
+      {frameLog.length > 0 && (
+        <div style={{ marginTop: "16px", textAlign: "left" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button
+              onClick={() => setShowDiagnostics((s) => !s)}
+              className="btn btn-secondary"
+              style={{ padding: "6px 12px", fontSize: "0.8rem" }}
+            >
+              <Terminal size={14} />
+              <span>{showDiagnostics ? "Masquer" : "Diagnostic"} ({frameLog.length} trames)</span>
+            </button>
+            {showDiagnostics && (
+              <button
+                onClick={copyLog}
+                className="btn btn-secondary"
+                style={{ padding: "6px 12px", fontSize: "0.8rem" }}
+              >
+                <Copy size={14} />
+                <span>{copied ? "Copié !" : "Copier"}</span>
+              </button>
+            )}
+          </div>
+
+          {showDiagnostics && (
+            <div
+              style={{
+                marginTop: "10px",
+                maxHeight: "180px",
+                overflowY: "auto",
+                background: "rgba(0, 0, 0, 0.35)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "10px",
+                fontFamily: "monospace",
+                fontSize: "0.7rem",
+                lineHeight: 1.5,
+              }}
+            >
+              {frameLog.map((f, i) => (
+                <div
+                  key={i}
+                  style={{
+                    color: f.checksumOk === false ? "var(--danger)" : "var(--text-secondary)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ color: "var(--text-muted)" }}>{f.ms}ms </span>
+                  <span style={{ color: "var(--accent-light)" }}>{f.hex}</span>
+                  <span> — {f.note}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

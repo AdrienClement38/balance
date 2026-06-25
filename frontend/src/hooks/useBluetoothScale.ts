@@ -1,4 +1,16 @@
 import { useState, useCallback, useRef } from "react";
+import {
+  QN_SERVICE,
+  QN_NOTIFY,
+  QN_WRITE_UNIT,
+  QN_WRITE_TIME,
+  parseQnFrame,
+  parseLegacyFrame,
+  parseAcFrame,
+  buildUnitConfigFrame,
+  buildTimeSyncFrame,
+  toHex,
+} from "../lib/qnProtocol.ts";
 
 export type ConnectionState =
   | "disconnected"
@@ -15,150 +27,468 @@ export interface ScaleMeasurement {
   impedanceOhms: number;
 }
 
+/** Une trame brute reçue, conservée pour le diagnostic sur le matériel réel. */
+export interface FrameLogEntry {
+  ms: number; // millisecondes depuis le début de la connexion
+  hex: string; // octets bruts en hexadécimal
+  opcode: number; // premier octet
+  note: string; // interprétation lisible
+  checksumOk: boolean | null; // null si non vérifiable
+}
+
+const MAX_LOG = 120; // assez large pour conserver les trames de finalisation d'une pesée complète
+const IMPEDANCE_WAIT_MS = 8000; // attente max de l'impédance après un poids stable
+const SETTLE_MS = 10000; // repli poids-seul si le poids est figé et qu'aucune analyse ne démarre
+const ANALYSIS_WAIT_MS = 20000; // attente max de l'impédance pendant l'analyse de composition
+
+// Services candidats déclarés à requestDevice (sinon Web Bluetooth bloque leur accès).
+// Couvre QN Type 1 (FFE0), QN Type 2 (FFF0), les services GATT standards de pesée,
+// et quelques services de modules BLE courants — pour pouvoir découvrir le bon.
+const SCALE_SERVICES = [QN_SERVICE, 0xfff0, 0x181d, 0x181b, 0x180f, 0x180a, 0xfee0, 0xfee7, 0xffb0];
+
+/** "0000ffe0-0000-1000-8000-00805f9b34fb" -> "0xffe0" (sinon renvoie l'UUID complet). */
+function shortUuid(uuid: string): string {
+  const m = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i.exec(uuid);
+  return m ? "0x" + m[1].toLowerCase() : uuid;
+}
+
+interface ScaleLayout {
+  notify: any;
+  writeUnit: any;
+  writeTime: any;
+}
+
+/**
+ * Découvre la disposition GATT réelle de la balance et journalise tout pour diagnostic.
+ * Essaie QN Type 1 (FFE0/FFE1 + FFE3/FFE4), puis QN Type 2 (FFF0/FFF1 + FFF2),
+ * puis une détection dynamique (1ᵉʳ service offrant une caractéristique de notification).
+ */
+async function resolveScaleLayout(
+  server: any,
+  logNote: (note: string) => void
+): Promise<ScaleLayout | null> {
+  const services: any[] = await server.getPrimaryServices().catch(() => []);
+  logNote(`Services : ${services.map((s) => shortUuid(s.uuid)).join(", ") || "(aucun candidat visible)"}`);
+  for (const svc of services) {
+    const chars: any[] = await svc.getCharacteristics().catch(() => []);
+    logNote(`  ${shortUuid(svc.uuid)} → ${chars.map((c) => shortUuid(c.uuid)).join(", ") || "(aucune)"}`);
+  }
+
+  // Type 1 : FFE0/FFE1, écritures séparées FFE3 (unité) et FFE4 (temps).
+  const s1 = services.find((s) => shortUuid(s.uuid) === "0xffe0");
+  if (s1) {
+    const notify = await s1.getCharacteristic(QN_NOTIFY).catch(() => null);
+    if (notify) {
+      logNote("Disposition QN Type 1 (FFE0) détectée.");
+      return {
+        notify,
+        writeUnit: await s1.getCharacteristic(QN_WRITE_UNIT).catch(() => null),
+        writeTime: await s1.getCharacteristic(QN_WRITE_TIME).catch(() => null),
+      };
+    }
+  }
+
+  // Type 2 : FFF0/FFF1, écriture unique FFF2 (unité + temps).
+  const s2 = services.find((s) => shortUuid(s.uuid) === "0xfff0");
+  if (s2) {
+    const notify = await s2.getCharacteristic(0xfff1).catch(() => null);
+    if (notify) {
+      const w = await s2.getCharacteristic(0xfff2).catch(() => null);
+      logNote("Disposition QN Type 2 (FFF0) détectée.");
+      return { notify, writeUnit: w, writeTime: w };
+    }
+  }
+
+  // Dynamique : premier service exposant une notification (+ une écriture si dispo).
+  for (const svc of services) {
+    const chars: any[] = await svc.getCharacteristics().catch(() => []);
+    const notify = chars.find((c) => c.properties?.notify || c.properties?.indicate);
+    const write = chars.find((c) => c.properties?.write || c.properties?.writeWithoutResponse);
+    if (notify) {
+      logNote(
+        `Disposition dynamique : notify ${shortUuid(notify.uuid)}${write ? ", write " + shortUuid(write.uuid) : ""}.`
+      );
+      return { notify, writeUnit: write || null, writeTime: write || null };
+    }
+  }
+
+  return null;
+}
+
 export function useBluetoothScale() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [currentWeight, setCurrentWeight] = useState<number>(0);
+  const [currentImpedance, setCurrentImpedance] = useState<number>(0);
   const [finalMeasurement, setFinalMeasurement] = useState<ScaleMeasurement | null>(null);
-  
+  const [frameLog, setFrameLog] = useState<FrameLogEntry[]>([]);
+
   const gattServerRef = useRef<any | null>(null);
-  const characteristicRef = useRef<any | null>(null);
+  const deviceRef = useRef<any | null>(null); // appareil sélectionné, réutilisé dans la session
+  const listenerDeviceRef = useRef<any | null>(null); // appareil sur lequel le listener est déjà posé
+  const writeUnitRef = useRef<any | null>(null);
+  const writeTimeRef = useRef<any | null>(null);
+  const divisorRef = useRef<number>(100);
+  const protocolTypeRef = useRef<number>(0);
+  const startTimeRef = useRef<number>(0);
+  const completedRef = useRef<boolean>(false);
+  const stableWeightRef = useRef<number>(0);
+  const lastRawRef = useRef<number>(0); // dernier poids brut, pour détecter la stabilité
+  const acImpedanceRef = useRef<number>(0); // impédance décodée des trames de finalisation AC
+  const impedanceTimerRef = useRef<number | undefined>(undefined);
+  const settleTimerRef = useRef<number | undefined>(undefined);
+
+  const log = useCallback((bytes: Uint8Array, note: string, checksumOk: boolean | null) => {
+    const entry: FrameLogEntry = {
+      ms: startTimeRef.current ? Date.now() - startTimeRef.current : 0,
+      hex: toHex(bytes),
+      opcode: bytes[0],
+      note,
+      checksumOk,
+    };
+    console.log(`[balance] ${entry.ms}ms ${entry.hex} → ${note}`);
+    setFrameLog((prev) => [...prev.slice(-(MAX_LOG - 1)), entry]);
+  }, []);
+
+  // Journalise une note (sans trame brute) — utilisé pour la découverte des services.
+  const logNote = useCallback((note: string) => {
+    const entry: FrameLogEntry = {
+      ms: startTimeRef.current ? Date.now() - startTimeRef.current : 0,
+      hex: "",
+      opcode: -1,
+      note,
+      checksumOk: null,
+    };
+    console.log(`[balance] ${entry.ms}ms — ${note}`);
+    setFrameLog((prev) => [...prev.slice(-(MAX_LOG - 1)), entry]);
+  }, []);
+
+  const clearTimers = () => {
+    if (impedanceTimerRef.current !== undefined) {
+      clearTimeout(impedanceTimerRef.current);
+      impedanceTimerRef.current = undefined;
+    }
+    if (settleTimerRef.current !== undefined) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = undefined;
+    }
+  };
 
   const disconnect = useCallback(() => {
+    clearTimers();
     if (gattServerRef.current && gattServerRef.current.connected) {
       gattServerRef.current.disconnect();
     }
     setConnectionState("disconnected");
     setCurrentWeight(0);
+    setCurrentImpedance(0);
     setFinalMeasurement(null);
   }, []);
+
+  const complete = useCallback((weightKg: number, impedanceOhms: number) => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    clearTimers();
+    setCurrentWeight(weightKg);
+    setCurrentImpedance(impedanceOhms);
+    setFinalMeasurement({ weightKg, impedanceOhms });
+    setConnectionState("completed");
+    if (gattServerRef.current && gattServerRef.current.connected) {
+      gattServerRef.current.disconnect();
+    }
+  }, []);
+
+  /** Écrit une trame sur une caractéristique, sans bloquer si elle est absente. */
+  const safeWrite = useCallback(
+    async (charRef: any, frame: Uint8Array, label: string) => {
+      if (!charRef) return;
+      try {
+        if (charRef.writeValueWithoutResponse) {
+          await charRef.writeValueWithoutResponse(frame);
+        } else {
+          await charRef.writeValue(frame);
+        }
+        log(frame, `→ envoi ${label}`, true);
+      } catch (err) {
+        console.warn(`[balance] écriture ${label} impossible :`, err);
+      }
+    },
+    [log]
+  );
+
+  const handleFrame = useCallback(
+    (value: DataView) => {
+      const bytes = new Uint8Array(value.buffer);
+      if (bytes.length === 0) return;
+
+      const qn = parseQnFrame(bytes, divisorRef.current);
+
+      // 1) Trame d'info : fixe le diviseur puis déclenche le handshake de config.
+      if (qn.kind === "info") {
+        divisorRef.current = qn.divisor ?? 100;
+        protocolTypeRef.current = bytes[2] ?? 0;
+        log(bytes, `info balance (diviseur=${divisorRef.current})`, qn.checksumOk);
+        // Handshake : configuration d'unité (kg) -> débloque la bio-impédance.
+        void safeWrite(
+          writeUnitRef.current,
+          buildUnitConfigFrame(protocolTypeRef.current),
+          "config unité (0x13)"
+        );
+        return;
+      }
+
+      // 2) Accusé de config -> on renvoie la synchro horaire.
+      if (qn.kind === "unit_ack") {
+        log(bytes, "accusé config unité (0x14)", qn.checksumOk);
+        void safeWrite(
+          writeTimeRef.current,
+          buildTimeSyncFrame(protocolTypeRef.current),
+          "synchro horaire (0x20)"
+        );
+        return;
+      }
+
+      // 3) Poids en direct.
+      if (qn.kind === "live" && qn.weightKg !== undefined) {
+        setCurrentWeight(qn.weightKg);
+        if (qn.stable) {
+          stableWeightRef.current = qn.weightKg;
+          setConnectionState("measuring_impedance");
+          log(bytes, `poids stable ${qn.weightKg.toFixed(2)} kg, attente impédance`, qn.checksumOk);
+          // Si l'impédance n'arrive pas, on conclut au poids seul après un délai.
+          if (impedanceTimerRef.current === undefined) {
+            impedanceTimerRef.current = window.setTimeout(() => {
+              complete(stableWeightRef.current, 0);
+            }, IMPEDANCE_WAIT_MS);
+          }
+        } else {
+          setConnectionState("stabilizing");
+          log(bytes, `poids en cours ${qn.weightKg.toFixed(2)} kg`, qn.checksumOk);
+        }
+        return;
+      }
+
+      // 4) Enregistrement final avec résistances -> mesure complète.
+      if (qn.kind === "record" && qn.weightKg !== undefined) {
+        const impedance = qn.impedanceOhms ?? 0;
+        log(
+          bytes,
+          `enregistrement : ${qn.weightKg.toFixed(2)} kg, impédance ${impedance} Ω`,
+          qn.checksumOk
+        );
+        if (impedance > 0) setCurrentImpedance(impedance);
+        complete(qn.weightKg, impedance);
+        return;
+      }
+
+      // 5) Protocole "AC" (FitTrack Dara, service FFB0, opcode 0xac).
+      const ac = parseAcFrame(bytes);
+      if (ac) {
+        if (ac.kind === "weight") {
+          setCurrentWeight(ac.weightKg);
+          if (ac.weightKg > 0) stableWeightRef.current = ac.weightKg;
+          log(bytes, `[AC] poids ${ac.weightKg.toFixed(1)} kg`, ac.checksumOk);
+
+          // Stabilité par inactivité : on (re)lance un minuteur à chaque variation notable
+          // (> ~0,3 kg). S'il expire sans nouvelle variation, le poids est figé -> on conclut.
+          if (Math.abs(ac.raw - lastRawRef.current) > 3) {
+            lastRawRef.current = ac.raw;
+            setConnectionState("stabilizing");
+            if (settleTimerRef.current !== undefined) clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = window.setTimeout(() => {
+              if (!completedRef.current && stableWeightRef.current > 0) {
+                setConnectionState("measuring_impedance");
+                complete(stableWeightRef.current, 0);
+              }
+            }, SETTLE_MS);
+          }
+        } else {
+          // Phase de finalisation (0xfd/0xfe). La 1ʳᵉ trame (00 00) = "analyse qui démarre" ;
+          // l'impédance réelle arrive dans une trame ultérieure (ex. fd 01 01 9e -> 414 Ω).
+          if (settleTimerRef.current !== undefined) {
+            clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = undefined;
+          }
+          setConnectionState("measuring_impedance");
+
+          if (ac.impedanceOhms > 0) {
+            // Impédance reçue -> on conclut vite avec la vraie composition corporelle.
+            acImpedanceRef.current = ac.impedanceOhms;
+            setCurrentImpedance(ac.impedanceOhms);
+            log(bytes, `[AC] impédance ${ac.impedanceOhms} Ω`, ac.checksumOk);
+            if (impedanceTimerRef.current !== undefined) clearTimeout(impedanceTimerRef.current);
+            impedanceTimerRef.current = window.setTimeout(
+              () => complete(stableWeightRef.current, acImpedanceRef.current),
+              1200
+            );
+          } else if (impedanceTimerRef.current === undefined && stableWeightRef.current > 0) {
+            // Top-départ de l'analyse : on patiente (l'impédance peut mettre plusieurs secondes).
+            log(bytes, "[AC] analyse de la composition en cours… restez sur la balance.", ac.checksumOk);
+            impedanceTimerRef.current = window.setTimeout(
+              () => complete(stableWeightRef.current, acImpedanceRef.current),
+              ANALYSIS_WAIT_MS
+            );
+          } else {
+            log(bytes, `[AC] analyse (type 0x${ac.type.toString(16)})…`, ac.checksumOk);
+          }
+        }
+        return;
+      }
+
+      // 6) Repli legacy pour les balances aux trames non standard.
+      const legacy = parseLegacyFrame(bytes);
+      if (legacy) {
+        setCurrentWeight(legacy.weightKg);
+        if (!legacy.stable) {
+          setConnectionState("stabilizing");
+          log(bytes, `[legacy] poids ${legacy.weightKg.toFixed(2)} kg`, qn.checksumOk);
+        } else if (legacy.impedanceOhms === 0) {
+          setConnectionState("measuring_impedance");
+          log(bytes, "[legacy] poids stable, attente impédance", qn.checksumOk);
+        } else {
+          log(
+            bytes,
+            `[legacy] final ${legacy.weightKg.toFixed(2)} kg, ${legacy.impedanceOhms} Ω`,
+            qn.checksumOk
+          );
+          setCurrentImpedance(legacy.impedanceOhms);
+          complete(legacy.weightKg, legacy.impedanceOhms);
+        }
+        return;
+      }
+
+      // 6) Trame inconnue : on la journalise pour diagnostic.
+      log(bytes, `trame non reconnue (opcode 0x${qn.opcode.toString(16)})`, qn.checksumOk);
+    },
+    [complete, log, safeWrite]
+  );
 
   const connect = useCallback(async () => {
     setErrorMsg(null);
     setConnectionState("scanning");
     setCurrentWeight(0);
+    setCurrentImpedance(0);
     setFinalMeasurement(null);
+    setFrameLog([]);
+    completedRef.current = false;
+    stableWeightRef.current = 0;
+    lastRawRef.current = 0;
+    acImpedanceRef.current = 0;
+    divisorRef.current = 100;
 
     const nav = navigator as any;
 
     if (!nav.bluetooth) {
       setConnectionState("error");
-      setErrorMsg("L'API Web Bluetooth n'est pas supportée ou activée sur ce navigateur. Assurez-vous d'utiliser Chrome/Edge/Opera et d'être en HTTPS.");
+      setErrorMsg(
+        "L'API Web Bluetooth n'est pas supportée ou activée sur ce navigateur. Utilisez Chrome/Edge/Opera en HTTPS."
+      );
       return;
     }
 
     try {
-      let device: any = null;
+      // 1. Réutiliser l'appareil déjà sélectionné pendant cette session : pas de re-sélection.
+      //    (gatt.connect() sur un appareil connu n'exige ni geste utilisateur ni sélecteur.)
+      let device: any = deviceRef.current;
 
-      // 1. Tenter de récupérer un appareil déjà autorisé dans le passé (getDevices)
-      if (nav.bluetooth.getDevices) {
-        const permittedDevices = await nav.bluetooth.getDevices();
-        // Recherche d'un appareil qui commence par QN, Fit, Dara ou Yolanda
-        const existingScale = permittedDevices.find(
-          (d: any) => 
-            d.name?.startsWith("QN-Scale") || 
-            d.name?.startsWith("QNScale") ||
-            d.name?.toLowerCase().includes("track") ||
-            d.name?.toLowerCase().includes("dara")
-        );
-
-        if (existingScale) {
-          console.log("Balance déjà autorisée détectée, connexion directe...", existingScale.name);
-          device = existingScale;
-        }
+      // 2. Sinon, tenter un appareil déjà autorisé par Chrome (permissions persistantes,
+      //    nécessite les flags Chrome — voir README).
+      if (!device && nav.bluetooth.getDevices) {
+        const permitted = await nav.bluetooth.getDevices();
+        device =
+          permitted.find(
+            (d: any) =>
+              d.name?.startsWith("QN-Scale") ||
+              d.name?.startsWith("QNScale") ||
+              d.name?.toLowerCase().includes("track") ||
+              d.name?.toLowerCase().includes("dara")
+          ) || null;
+        if (device) console.log("[balance] balance déjà autorisée :", device.name);
       }
 
-      // 2. Si aucun appareil n'a été pré-autorisé, on demande à l'utilisateur via le pop-up
+      // 3. Sinon, ouvrir le sélecteur (geste utilisateur requis, une seule fois).
       if (!device) {
-        console.log("Aucun appareil pré-autorisé trouvé, ouverture du sélecteur...");
-        // acceptAllDevices: true est le filtre le plus robuste : il affiche tous les appareils détectés
-        // pour vous laisser choisir votre balance sans dépendre d'un nom de diffusion strict.
         device = await nav.bluetooth.requestDevice({
           acceptAllDevices: true,
-          optionalServices: [0xffe0]
+          optionalServices: SCALE_SERVICES,
         });
       }
 
+      deviceRef.current = device; // mémoriser pour les prochaines pesées
+
       setConnectionState("connecting");
+      startTimeRef.current = Date.now();
 
-      // Écouter l'événement de déconnexion inattendue
-      device.addEventListener("gattserverdisconnected", () => {
-        setConnectionState("disconnected");
-        console.log("Balance déconnectée.");
-      });
-
-      // 3. Se connecter au serveur GATT
-      const server = await device.gatt?.connect();
-      if (!server) {
-        throw new Error("Impossible de se connecter au serveur GATT de la balance.");
+      // Poser le listener une seule fois par appareil (évite les listeners empilés à la réutilisation).
+      if (listenerDeviceRef.current !== device) {
+        listenerDeviceRef.current = device;
+        device.addEventListener("gattserverdisconnected", () => {
+          if (!completedRef.current) {
+            setConnectionState("disconnected");
+            clearTimers();
+          }
+          console.log("[balance] balance déconnectée.");
+        });
       }
+
+      const server = await device.gatt?.connect();
+      if (!server) throw new Error("Impossible de se connecter au serveur GATT de la balance.");
       gattServerRef.current = server;
       setConnectionState("connected");
 
-      // 4. Récupérer le service primaire FFE0
-      const service = await server.getPrimaryService(0xffe0);
+      // Découvrir la disposition GATT réelle (FFE0 Type 1, FFF0 Type 2, ou dynamique)
+      // et journaliser les services/caractéristiques pour diagnostic.
+      const layout = await resolveScaleLayout(server, logNote);
+      if (!layout || !layout.notify) {
+        throw new Error(
+          "Aucun service de balance compatible trouvé. Ouvrez le panneau Diagnostic et envoyez-moi la liste des services."
+        );
+      }
+      writeUnitRef.current = layout.writeUnit;
+      writeTimeRef.current = layout.writeTime;
 
-      // 5. Récupérer la caractéristique de notification FFE1
-      const characteristic = await service.getCharacteristic(0xffe1);
-      characteristicRef.current = characteristic;
-
-      // 6. Commencer à écouter les notifications
-      await characteristic.startNotifications();
-      
-      characteristic.addEventListener("characteristicvaluechanged", (event: any) => {
-        const target = event.target as any;
-        const value = target.value;
-        if (!value) return;
-
-        const bytes = new Uint8Array(value.buffer);
-        console.log("Trame reçue (Hex) :", Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join(" "));
-
-        if (bytes[0] === 0x0d || bytes[0] === 0xfd) {
-          const status = bytes[1];
-          const rawWeight = (bytes[2] << 8) | bytes[3];
-          const weight = rawWeight / 100.0;
-
-          if (status === 0x2c || status === 0x20) {
-            setConnectionState("stabilizing");
-            setCurrentWeight(weight);
-          }
-          else if (status === 0x24 || status === 0x22 || status === 0x04) {
-            setCurrentWeight(weight);
-            const impedance = (bytes[4] << 8) | bytes[5];
-            
-            console.log(`Poids stable : ${weight} kg | Impédance : ${impedance} ohms`);
-
-            if (impedance === 0) {
-              setConnectionState("measuring_impedance");
-            } else {
-              setConnectionState("completed");
-              setFinalMeasurement({
-                weightKg: weight,
-                impedanceOhms: impedance
-              });
-              
-              if (server.connected) {
-                server.disconnect();
-              }
-            }
-          }
-        }
+      await layout.notify.startNotifications();
+      layout.notify.addEventListener("characteristicvaluechanged", (event: any) => {
+        const v = event.target?.value as DataView | undefined;
+        if (v) handleFrame(v);
       });
-
-      console.log("Notifications activées, en attente de pesée...");
-
+      logNote("Notifications activées. En attente de pesée…");
     } catch (err: any) {
-      console.error("Erreur Web Bluetooth :", err);
+      const name = err?.name || "Error";
+      const message = err?.message || String(err);
+      console.error(`[balance] erreur Web Bluetooth : ${name}: ${message}`);
       setConnectionState("error");
-      setErrorMsg(err.message || "Une erreur est survenue lors de la connexion Bluetooth.");
+
+      // Cas 1 : l'utilisateur a fermé le sélecteur sans rien choisir.
+      if (name === "NotFoundError" && /cancel/i.test(message)) {
+        setErrorMsg(
+          "Aucune balance sélectionnée. Réveillez d'abord la balance (montez brièvement dessus pour qu'elle s'allume), cliquez à nouveau sur « Lancer une pesée », puis choisissez-la dans la liste."
+        );
+        return;
+      }
+
+      // Cas 2 : échec de connexion GATT — souvent un autre central tient la balance,
+      // ou un appairage Windows figé.
+      if (name === "NetworkError" || /gatt|disconnected/i.test(message)) {
+        deviceRef.current = null; // autoriser une nouvelle sélection au prochain essai
+        setErrorMsg(
+          "Connexion à la balance impossible. Causes fréquentes : une autre app la détient déjà (coupez le Bluetooth du téléphone / fermez l'app FitTrack), ou elle est figée dans l'appairage Windows (Paramètres > Bluetooth > Retirer l'appareil). Réveillez la balance et réessayez."
+        );
+        return;
+      }
+
+      // Cas 3 : service/caractéristique introuvable (modèle de protocole différent) ou autre.
+      setErrorMsg(`Bluetooth (${name}) : ${message}`);
     }
-  }, []);
+  }, [handleFrame]);
 
   return {
     connectionState,
     errorMsg,
     currentWeight,
+    currentImpedance,
     finalMeasurement,
+    frameLog,
     connect,
     disconnect,
   };
