@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useId } from "react";
 
 interface MetricCardProps {
   title: string;
@@ -21,7 +21,12 @@ export function MetricCard({
   progress,
   historyValues = [],
 }: MetricCardProps) {
-  
+
+  // Identifiant unique et SÛR pour le dégradé SVG. Auparavant l'id dérivait du
+  // titre : les parenthèses (ex. "(BMR)", "(Eau)") cassaient l'attribut url(...),
+  // le dégradé n'était pas résolu et le SVG retombait sur un remplissage noir.
+  const gradId = `spark-grad-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+
   // Obtenir la couleur associée au type de catégorie
   const getCategoryColor = () => {
     switch (category) {
@@ -63,7 +68,6 @@ export function MetricCard({
 
     const linePath = `M ${points[0].x} ${points[0].y} ` + points.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
     const areaPath = `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`;
-    const gradId = `spark-grad-${title.replace(/\s+/g, "-")}-${Math.floor(Math.random() * 1000)}`;
 
     return (
       <div style={{ width: "100%", height: "40px", marginTop: "12px", marginBottom: "8px" }}>

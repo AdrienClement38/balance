@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Measurement } from "../services/api.ts";
+import { calculateFfm } from "../lib/bodyMetrics.ts";
 import { TrendingUp } from "lucide-react";
 
 interface BiaChartProps {
@@ -34,7 +35,7 @@ export function BiaChart({ history }: BiaChartProps) {
         return f;
       case "ffm":
         // Masse sans graisse (calculée = poids - masse grasse)
-        return w - (w * f) / 100;
+        return calculateFfm(w, f);
       case "muscle":
         return m.musclePct ? parseFloat(m.musclePct) : 0;
       case "water":

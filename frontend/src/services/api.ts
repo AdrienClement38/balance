@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3006/api";
 
 export interface User {
   id: string;
@@ -49,6 +49,14 @@ async function apiFetch<T>(
     ...options,
     headers,
   });
+
+  // Token expiré/invalide sur un appel authentifié -> session expirée.
+  // (On exclut /auth/* : un 401 sur login = mauvais identifiants, pas une session.)
+  if (response.status === 401 && !endpoint.startsWith("/auth")) {
+    localStorage.removeItem("balance_jwt_token");
+    localStorage.removeItem("balance_user");
+    window.dispatchEvent(new CustomEvent("balance:session-expired"));
+  }
 
   if (!response.ok) {
     let errorMessage = "Une erreur est survenue lors de la communication avec le serveur.";
