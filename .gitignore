@@ -8,6 +8,10 @@ build/
 .cache/
 out/
 
+# Base de données locale PGlite (ne doit jamais être versionnée)
+db_data/
+db_data.cloned-backup/
+
 # Environment variables
 .env
 .env.local
@@ -29,6 +33,7 @@ Thumbs.db
 # IDEs and editors
 .idea/
 .vscode/
+.claude/
 *.suo
 *.ntvs*
 *.njsproj
