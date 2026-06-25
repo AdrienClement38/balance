@@ -60,8 +60,6 @@ export function calculateBia(input: BiaInput): BiaResult {
   if (gender === "male") {
     tbw = 0.372 * impedanceIndex + 0.142 * weightKg + 0.079 * ageYears + 3.05;
   } else {
-    tbw = 0.372 * impedanceIndex + 0.142 * weightKg + 0.079 * ageYears + 3.05; // Fallback
-    // Ajustement femelle
     tbw = 0.305 * impedanceIndex + 0.154 * weightKg + 0.326;
   }
 
