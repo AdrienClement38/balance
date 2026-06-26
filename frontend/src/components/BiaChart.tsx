@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Measurement } from "../services/api.ts";
 import { calculateFfm } from "../lib/bodyMetrics.ts";
-import { nearestIndexByX } from "../lib/chart.ts";
+import { scrubHandlers } from "../lib/chart.ts";
 import { TrendingUp } from "lucide-react";
 
 interface BiaChartProps {
@@ -159,8 +159,12 @@ export function BiaChart({ history }: BiaChartProps) {
       </div>
 
       {/* SVG Canvas */}
-      <div style={{ position: "relative", width: "100%", overflow: "hidden" }}>
-        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      <div style={{ position: "relative", width: "100%", overflow: "hidden", touchAction: "none" }}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ width: "100%", height: "auto", display: "block", touchAction: "none" }}
+          {...scrubHandlers(points.map((p) => p.x), width, setActiveIdx)}
+        >
           <defs>
             <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
@@ -243,31 +247,6 @@ export function BiaChart({ history }: BiaChartProps) {
               </g>
             );
           })}
-
-          {/* Zone de capture sur tout le graphe : suit le pointeur / le doigt et
-              sélectionne le point le plus proche en X (mode « nearest » + glissé tactile). */}
-          <rect
-            x={0}
-            y={0}
-            width={width}
-            height={height}
-            fill="transparent"
-            style={{ touchAction: "none" }}
-            onPointerDown={(e) => {
-              try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* non supporté */ }
-              const svg = e.currentTarget.ownerSVGElement;
-              if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
-            }}
-            onPointerMove={(e) => {
-              const svg = e.currentTarget.ownerSVGElement;
-              if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
-            }}
-            onPointerUp={(e) => {
-              try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* idem */ }
-              setActiveIdx(null);
-            }}
-            onPointerLeave={() => setActiveIdx(null)}
-          />
 
           {/* Infobulle du point actif (date + valeur) */}
           {activeIdx !== null && points[activeIdx] && (() => {

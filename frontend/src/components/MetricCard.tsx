@@ -1,5 +1,5 @@
 import { ReactNode, useId, useState } from "react";
-import { nearestIndexByX } from "../lib/chart.ts";
+import { scrubHandlers } from "../lib/chart.ts";
 
 interface MetricCardProps {
   title: string;
@@ -59,8 +59,12 @@ function Sparkline({ values, color, gradId, unit }: SparklineProps) {
   const areaPath = `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`;
 
   return (
-    <div style={{ width: "100%", height: "40px", marginTop: "12px", marginBottom: "8px" }}>
-      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "100%", overflow: "visible" }}>
+    <div style={{ width: "100%", height: "40px", marginTop: "12px", marginBottom: "8px", touchAction: "none" }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ width: "100%", height: "100%", overflow: "visible", touchAction: "none" }}
+        {...scrubHandlers(points.map((p) => p.x), width, setActiveIdx)}
+      >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.25" />
@@ -84,31 +88,6 @@ function Sparkline({ values, color, gradId, unit }: SparklineProps) {
         {activeIdx !== null && (
           <circle cx={points[activeIdx].x} cy={points[activeIdx].y} r="4" fill={color} stroke="var(--bg-primary)" strokeWidth="1.5" />
         )}
-
-        {/* Zone de capture : suit le pointeur / le doigt et sélectionne le point
-            le plus proche en X (mode « nearest » + glissé tactile). */}
-        <rect
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          fill="transparent"
-          style={{ touchAction: "none" }}
-          onPointerDown={(e) => {
-            try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* non supporté */ }
-            const svg = e.currentTarget.ownerSVGElement;
-            if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
-          }}
-          onPointerMove={(e) => {
-            const svg = e.currentTarget.ownerSVGElement;
-            if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
-          }}
-          onPointerUp={(e) => {
-            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* idem */ }
-            setActiveIdx(null);
-          }}
-          onPointerLeave={() => setActiveIdx(null)}
-        />
 
         {/* Infobulle de la valeur du point actif */}
         {activeIdx !== null && (() => {

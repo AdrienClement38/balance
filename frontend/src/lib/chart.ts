@@ -1,3 +1,5 @@
+import type { PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
+
 /**
  * Indice du point dont l'abscisse (en coordonnées viewBox) est la plus proche de
  * la position X du pointeur. Permet un affichage « nearest » : pas besoin d'être
@@ -22,4 +24,49 @@ export function nearestIndexByX(
     }
   }
   return best;
+}
+
+/**
+ * Gestionnaires à étaler sur un <svg> pour un suivi « nearest » qui marche au
+ * survol (souris) ET au glissé du doigt (tactile). On combine pointer events et
+ * touch events natifs (les pointer events seuls sont parfois capricieux sur
+ * mobile). Penser à mettre `touch-action: none` sur le conteneur du SVG.
+ */
+export function scrubHandlers(
+  pointsX: number[],
+  viewBoxWidth: number,
+  setActive: (index: number | null) => void
+) {
+  const at = (clientX: number, svg: SVGSVGElement) =>
+    setActive(nearestIndexByX(clientX, svg, pointsX, viewBoxWidth));
+
+  return {
+    onPointerDown: (e: ReactPointerEvent<SVGSVGElement>) => {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* setPointerCapture non supporté : sans gravité */
+      }
+      at(e.clientX, e.currentTarget);
+    },
+    onPointerMove: (e: ReactPointerEvent<SVGSVGElement>) => at(e.clientX, e.currentTarget),
+    onPointerUp: (e: ReactPointerEvent<SVGSVGElement>) => {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* idem */
+      }
+      setActive(null);
+    },
+    onPointerLeave: () => setActive(null),
+    onTouchStart: (e: ReactTouchEvent<SVGSVGElement>) => {
+      const t = e.touches[0];
+      if (t) at(t.clientX, e.currentTarget);
+    },
+    onTouchMove: (e: ReactTouchEvent<SVGSVGElement>) => {
+      const t = e.touches[0];
+      if (t) at(t.clientX, e.currentTarget);
+    },
+    onTouchEnd: () => setActive(null),
+  };
 }
