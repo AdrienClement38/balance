@@ -2,6 +2,7 @@ import { Profile, Measurement } from "../services/api.ts";
 import ScaleConnector from "./ScaleConnector.tsx";
 import MetricCard from "./MetricCard.tsx";
 import BiaChart from "./BiaChart.tsx";
+import ErrorLogPanel from "./ErrorLogPanel.tsx";
 import {
   calculateAge,
   calculateBmi,
@@ -270,6 +271,9 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
           <BiaChart history={history} />
         </div>
       )}
+
+      {/* Journal des erreurs (impédance basse, échecs d'enregistrement…) */}
+      <ErrorLogPanel reloadKey={history.length} />
     </div>
   );
 }

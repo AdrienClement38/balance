@@ -12,6 +12,11 @@ import {
   Copy,
 } from "lucide-react";
 
+// Seuil d'impédance « anormalement basse » : en dessous, les jambes/pieds se sont
+// probablement touchés (court-circuit) -> la composition corporelle n'est pas fiable.
+// À ajuster selon les vraies valeurs observées en cas de contact.
+const LOW_IMPEDANCE_THRESHOLD = 250;
+
 interface ScaleConnectorProps {
   activeProfile: Profile;
   onMeasurementSaved: () => void;
@@ -34,27 +39,42 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
   // Statut de l'enregistrement de la pesée (distinct de l'état de la connexion).
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [retryNonce, setRetryNonce] = useState(0); // incrémenté pour relancer une sauvegarde
+  const [impedanceWarning, setImpedanceWarning] = useState<number | null>(null);
 
   // Enregistrement de la mesure finale, avec PLUSIEURS tentatives : l'important est que
   // la pesée aille jusqu'au bout (on préfère la fiabilité à la vitesse).
   useEffect(() => {
     if (connectionState !== "completed" || !finalMeasurement) {
       setSaveStatus("idle");
+      setImpedanceWarning(null);
       return;
     }
 
     let cancelled = false;
     const MAX_ATTEMPTS = 6;
+    const { weightKg, impedanceOhms } = finalMeasurement;
+
+    // Impédance anormalement basse -> jambes/pieds probablement en contact (court-circuit).
+    if (impedanceOhms > 0 && impedanceOhms < LOW_IMPEDANCE_THRESHOLD) {
+      setImpedanceWarning(impedanceOhms);
+      api.errors
+        .log({
+          profileId: activeProfile.id,
+          code: "low_impedance",
+          message: `Impédance anormalement basse (${impedanceOhms} Ω, seuil ${LOW_IMPEDANCE_THRESHOLD}) — jambes/pieds probablement en contact, composition corporelle non fiable.`,
+          weightKg,
+          impedanceOhms,
+        })
+        .catch((e) => console.error("Échec du log d'erreur (impédance) :", e));
+    } else {
+      setImpedanceWarning(null);
+    }
 
     (async () => {
       setSaveStatus("saving");
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
-          await api.metrics.create({
-            profileId: activeProfile.id,
-            weightKg: finalMeasurement.weightKg,
-            impedanceOhms: finalMeasurement.impedanceOhms,
-          });
+          await api.metrics.create({ profileId: activeProfile.id, weightKg, impedanceOhms });
           if (cancelled) return;
           setSaveStatus("saved");
           onMeasurementSaved(); // rafraîchit l'historique / les graphiques
@@ -69,7 +89,18 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
           }
         }
       }
-      if (!cancelled) setSaveStatus("error");
+      if (cancelled) return;
+      setSaveStatus("error");
+      // Journaliser l'échec d'enregistrement (best-effort : peut échouer si le réseau est coupé).
+      api.errors
+        .log({
+          profileId: activeProfile.id,
+          code: "save_failed",
+          message: `Échec de l'enregistrement de la pesée après ${MAX_ATTEMPTS} tentatives.`,
+          weightKg,
+          impedanceOhms,
+        })
+        .catch((e) => console.error("Échec du log d'erreur (save) :", e));
     })();
 
     return () => {
@@ -195,6 +226,25 @@ export function ScaleConnector({ activeProfile, onMeasurementSaved }: ScaleConne
           </div>
         )}
       </div>
+
+      {impedanceWarning !== null && (
+        <div
+          style={{
+            background: "rgba(245, 158, 11, 0.1)",
+            border: "1px solid rgba(245, 158, 11, 0.25)",
+            borderRadius: "var(--radius-sm)",
+            padding: "10px 12px",
+            color: "#f59e0b",
+            fontSize: "0.82rem",
+            marginBottom: "16px",
+            textAlign: "left",
+          }}
+        >
+          ⚠️ Impédance très basse ({impedanceWarning} Ω) — tes jambes ou tes pieds se sont
+          peut-être touchés. La composition corporelle est probablement faussée. Refais la
+          pesée, pieds bien écartés.
+        </div>
+      )}
 
       {errorMsg && (
         <div

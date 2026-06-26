@@ -31,6 +31,17 @@ export interface Measurement {
   createdAt: string;
 }
 
+export interface ErrorLog {
+  id: string;
+  profileId: string;
+  profileName: string;
+  code: string;
+  message: string;
+  weightKg: string | null;
+  impedanceOhms: number | null;
+  createdAt: string;
+}
+
 // Récupérer le token depuis le stockage local
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem("balance_jwt_token");
@@ -155,6 +166,26 @@ export const api = {
     async getHistory(profileId: string, limit: number = 50): Promise<Measurement[]> {
       return apiFetch<Measurement[]>(`/metrics/${profileId}?limit=${limit}`);
     }
-  }
+  },
+
+  // --- Journal des erreurs de pesée ---
+  errors: {
+    async log(entry: {
+      profileId: string;
+      code: string;
+      message: string;
+      weightKg?: number;
+      impedanceOhms?: number;
+    }): Promise<ErrorLog> {
+      return apiFetch<ErrorLog>("/errors", {
+        method: "POST",
+        body: JSON.stringify(entry),
+      });
+    },
+
+    async list(limit: number = 50): Promise<ErrorLog[]> {
+      return apiFetch<ErrorLog[]>(`/errors?limit=${limit}`);
+    },
+  },
 };
 export default api;
