@@ -1,67 +1,89 @@
-name: Deploy to AlwaysData
-
-# Build dans GitHub Actions (l'hébergement AlwaysData n'a pas assez de RAM pour
-# compiler), puis envoi du dist/ en SSH et redémarrage du site via l'API.
+name: CI & Deploy
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  pull_request:
+  workflow_dispatch:
 
+# Un seul déploiement à la fois.
 concurrency:
-  group: deploy-alwaysdata
-  cancel-in-progress: true
-
-env:
-  REMOTE: ac-balance@ssh-ac-balance.alwaysdata.net
-  SSH_HOST: ssh-ac-balance.alwaysdata.net
-  APP_DIR: www/balance
-  SITE_ID: "1054544"
-  ACCOUNT: ac-balance
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  ci:
+    name: Build · Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: Build frontend
+          node-version: 22
+      - name: Frontend (build + tests)
         working-directory: frontend
         run: |
           npm ci
           npm run build
-
-      - name: Build backend
+          npm test
+      - name: Backend (build + tests)
         working-directory: backend
         run: |
           npm ci
           npm run build
+          npm test
 
-      - name: Setup SSH
+  deploy:
+    name: Déploiement AlwaysData
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ssh-ac-balance.alwaysdata.net
+      SSH_USER: ac-balance
+      REMOTE_DIR: www/balance
+      SITE_URL: https://ac-balance.alwaysdata.net
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build frontend + backend
+        run: |
+          (cd frontend && npm ci && npm run build)
+          (cd backend  && npm ci && npm run build)
+
+      - name: Configurer la clé SSH
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.ALWAYSDATA_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.ALWAYSDATA_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Upload build to AlwaysData
+      - name: Envoyer les artefacts (rsync)
         run: |
-          SSH="ssh -i ~/.ssh/id_ed25519"
-          # --delete : nettoie les anciens assets hashés / fichiers compilés obsolètes
-          rsync -az --delete -e "$SSH" frontend/dist/ "$REMOTE:$APP_DIR/frontend/dist/"
-          rsync -az --delete -e "$SSH" backend/dist/  "$REMOTE:$APP_DIR/backend/dist/"
-          # package.json/lock pour aligner les dépendances runtime si elles changent
-          rsync -az -e "$SSH" backend/package.json backend/package-lock.json "$REMOTE:$APP_DIR/backend/"
+          RSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes"
+          # rsync ne crée pas les dossiers parents -> on les crée d'abord.
+          $RSH "$SSH_USER@$SSH_HOST" "mkdir -p '$REMOTE_DIR/frontend/dist/assets' '$REMOTE_DIR/backend/dist'"
+          # Assets hashés en ADDITIF (un onglet déjà ouvert garde ses chunks après un déploiement).
+          rsync -az -e "$RSH" frontend/dist/assets/ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/frontend/dist/assets/"
+          # Reste du frontend (index.html, sw.js, manifest, icônes…) : --delete propre, assets/ exclu.
+          rsync -az --delete --exclude='/assets/' -e "$RSH" frontend/dist/ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/frontend/dist/"
+          # Backend compilé (inclut dist/db/migrations) + package.json/lock pour le runtime.
+          rsync -az --delete -e "$RSH" backend/dist/ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/backend/dist/"
+          rsync -az          -e "$RSH" backend/package.json backend/package-lock.json "$SSH_USER@$SSH_HOST:$REMOTE_DIR/backend/"
 
-      - name: Install runtime deps & restart the site
+      - name: Installer le runtime + redémarrer
         run: |
-          ssh -i ~/.ssh/id_ed25519 "$REMOTE" \
-            "cd ~/$APP_DIR/backend && npm install --omit=dev --no-audit --no-fund"
-          curl -fsS -X POST --basic \
-            --user "${{ secrets.ALWAYSDATA_API_KEY }} account=$ACCOUNT:" \
-            "https://api.alwaysdata.com/v1/site/$SITE_ID/restart/"
-          echo "Déploiement terminé."
+          # Deps runtime seulement (ni Vite, ni tsc, ni sharp), puis on tue le process :
+          # AlwaysData le respawn avec le nouveau code. Le motif [d]ist/server.js matche le
+          # serveur SANS matcher la commande pkill elle-même. Migrations appliquées au démarrage.
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" \
+            "cd $REMOTE_DIR/backend && npm install --omit=dev --no-audit --no-fund && (pkill -f '[d]ist/server.js' || true)"
+
+      - name: Vérifier que le site répond
+        run: |
+          sleep 3
+          curl -fsS --retry 6 --retry-delay 3 "$SITE_URL/healthz" > /dev/null
+          echo "Déploiement OK : $SITE_URL répond."
