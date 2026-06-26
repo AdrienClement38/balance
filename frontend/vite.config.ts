@@ -10,8 +10,11 @@ export default defineConfig({
     // par le build, invalidation de cache versionnée à chaque release, et enregistrement
     // du service worker injecté automatiquement. Remplace l'ancien sw.js écrit à la main.
     VitePWA({
-      registerType: "autoUpdate",
-      injectRegister: "auto",
+      // "prompt" + enregistrement manuel dans main.tsx : on applique la mise à jour
+      // nous-mêmes (updateSW(true)) dès qu'un déploiement est détecté -> rechargement
+      // automatique, sans bandeau ni double rechargement manuel.
+      registerType: "prompt",
+      injectRegister: false,
       includeAssets: ["icon.svg", "apple-touch-icon.png"],
       manifest: {
         name: "Balance Connectée",
