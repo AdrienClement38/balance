@@ -1,4 +1,5 @@
-import { ReactNode, useId, useState } from "react";
+import { ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { scrubHandlers } from "../lib/chart.ts";
 import { MetricGuidance, STATUS_COLORS } from "../lib/metricGuidance.ts";
@@ -129,6 +130,67 @@ export function MetricCard({
   const gradId = `spark-grad-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const color = CATEGORY_COLORS[category] ?? CATEGORY_COLORS.primary;
   const [infoOpen, setInfoOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  // Positionne le popover (fixed) sous le bouton, élargi et borné à l'écran ;
+  // bascule au-dessus s'il déborderait en bas. Recalculé au scroll/redimension.
+  useLayoutEffect(() => {
+    if (!infoOpen) {
+      setPos(null);
+      return;
+    }
+    const place = () => {
+      const btn = btnRef.current;
+      const pop = popRef.current;
+      if (!btn || !pop) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const margin = 12;
+      const width = Math.min(380, vw - margin * 2);
+      // Applique la largeur AVANT de mesurer la hauteur : sinon elle est mesurée à
+      // une autre largeur (retours à la ligne différents) et le popover se décale.
+      pop.style.width = `${width}px`;
+      const popH = pop.offsetHeight;
+      const r = btn.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(r.left, vw - width - margin));
+      let top = r.bottom + 8; // sous le bouton par défaut
+      if (popH && top + popH > vh - margin) {
+        top = r.top - 8 - popH; // bascule au-dessus s'il déborderait en bas
+      }
+      // Borne finale : garde le popover dans l'écran même si l'ancre est hors-vue.
+      const maxTop = Math.max(margin, vh - margin - popH);
+      top = Math.max(margin, Math.min(top, maxTop));
+      setPos({ top, left, width });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [infoOpen]);
+
+  // Ferme au clic en dehors du popover (et du bouton) ou sur Échap.
+  useEffect(() => {
+    if (!infoOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setInfoOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setInfoOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [infoOpen]);
 
   return (
     <div className={`glass-panel metric-card ${category}`} style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
@@ -189,11 +251,16 @@ export function MetricCard({
         </span>
       </div>
 
-      {/* Retour santé repliable (la « petite flèche ») */}
+      {/* Retour santé : en-tête cliquable inline. Le contenu s'ouvre en POPOVER
+          flottant (portal vers <body>) pour passer AU-DESSUS des autres cartes —
+          la carte a overflow:hidden et un ancêtre backdrop-filter qui empêcheraient
+          un simple position:absolute de déborder. */}
       {guidance && (
         <div style={{ marginTop: "12px", borderTop: "1px solid var(--glass-border)", paddingTop: "10px" }}>
           <button
+            ref={btnRef}
             onClick={() => setInfoOpen((o) => !o)}
+            aria-expanded={infoOpen}
             style={{
               width: "100%",
               display: "flex",
@@ -215,27 +282,57 @@ export function MetricCard({
             </span>
             {infoOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
-          {infoOpen && (
-            <div style={{ marginTop: "10px", fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-              <p style={{ margin: 0 }}>{guidance.explanation}</p>
-              {guidance.tips.length > 0 && (
-                <div style={{ marginTop: "8px" }}>
-                  <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.76rem" }}>
-                    Pour l'améliorer :
-                  </span>
-                  <ul style={{ margin: "5px 0 0", paddingLeft: "18px" }}>
-                    {guidance.tips.map((t, i) => (
-                      <li key={i} style={{ marginBottom: "3px" }}>
-                        {t}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
+
+      {guidance &&
+        infoOpen &&
+        createPortal(
+          <div
+            ref={popRef}
+            role="dialog"
+            aria-label={guidance.verdict}
+            style={{
+              position: "fixed",
+              top: pos?.top ?? -9999,
+              left: pos?.left ?? 0,
+              width: pos?.width ?? 360,
+              maxHeight: "calc(100vh - 24px)",
+              overflowY: "auto",
+              visibility: pos ? "visible" : "hidden",
+              zIndex: 1000,
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--glass-border)",
+              borderRadius: "var(--radius-md)",
+              boxShadow: "0 16px 40px -12px rgba(0, 0, 0, 0.6)",
+              padding: "14px 16px",
+              fontSize: "0.82rem",
+              color: "var(--text-secondary)",
+              lineHeight: 1.55,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+              <span style={{ width: "9px", height: "9px", borderRadius: "50%", background: STATUS_COLORS[guidance.status], flexShrink: 0 }} />
+              <strong style={{ color: "var(--text-primary)", fontSize: "0.9rem" }}>{guidance.verdict}</strong>
+            </div>
+            <p style={{ margin: 0 }}>{guidance.explanation}</p>
+            {guidance.tips.length > 0 && (
+              <div style={{ marginTop: "10px" }}>
+                <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.78rem" }}>
+                  Pour l'améliorer :
+                </span>
+                <ul style={{ margin: "6px 0 0", paddingLeft: "18px" }}>
+                  {guidance.tips.map((t, i) => (
+                    <li key={i} style={{ marginBottom: "4px" }}>
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
