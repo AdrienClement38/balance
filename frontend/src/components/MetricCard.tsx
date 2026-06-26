@@ -1,5 +1,7 @@
 import { ReactNode, useId, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { scrubHandlers } from "../lib/chart.ts";
+import { MetricGuidance, STATUS_COLORS } from "../lib/metricGuidance.ts";
 
 interface MetricCardProps {
   title: string;
@@ -10,6 +12,7 @@ interface MetricCardProps {
   label: string;
   progress?: number;
   historyValues?: number[]; // Liste ordonnée des valeurs historiques (du plus vieux au plus récent)
+  guidance?: MetricGuidance | null; // retour santé repliable (évaluation + explication + conseils)
 }
 
 const CATEGORY_COLORS: Record<MetricCardProps["category"], string> = {
@@ -119,11 +122,13 @@ export function MetricCard({
   label,
   progress,
   historyValues = [],
+  guidance,
 }: MetricCardProps) {
   // Identifiant unique et SÛR pour le dégradé SVG (les parenthèses d'un titre, ex.
   // "(BMR)", cassaient l'attribut url(...) et donnaient un remplissage noir).
   const gradId = `spark-grad-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const color = CATEGORY_COLORS[category] ?? CATEGORY_COLORS.primary;
+  const [infoOpen, setInfoOpen] = useState(false);
 
   return (
     <div className={`glass-panel metric-card ${category}`} style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
@@ -183,6 +188,54 @@ export function MetricCard({
           {label}
         </span>
       </div>
+
+      {/* Retour santé repliable (la « petite flèche ») */}
+      {guidance && (
+        <div style={{ marginTop: "12px", borderTop: "1px solid var(--glass-border)", paddingTop: "10px" }}>
+          <button
+            onClick={() => setInfoOpen((o) => !o)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "none",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: 0,
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              fontFamily: "inherit",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+              <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: STATUS_COLORS[guidance.status], flexShrink: 0 }} />
+              {guidance.verdict}
+            </span>
+            {infoOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {infoOpen && (
+            <div style={{ marginTop: "10px", fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              <p style={{ margin: 0 }}>{guidance.explanation}</p>
+              {guidance.tips.length > 0 && (
+                <div style={{ marginTop: "8px" }}>
+                  <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.76rem" }}>
+                    Pour l'améliorer :
+                  </span>
+                  <ul style={{ margin: "5px 0 0", paddingLeft: "18px" }}>
+                    {guidance.tips.map((t, i) => (
+                      <li key={i} style={{ marginBottom: "3px" }}>
+                        {t}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

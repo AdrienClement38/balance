@@ -11,6 +11,7 @@ import {
   getFatStatus,
   getVisceralStatus,
 } from "../lib/bodyMetrics.ts";
+import { getGuidance, GuidanceContext } from "../lib/metricGuidance.ts";
 import {
   Scale,
   Activity,
@@ -46,6 +47,13 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
   const boneHistory = chronHistory.map((m) => num(m.boneMassKg));
   const visceralHistory = chronHistory.map((m) => m.visceralFat || 0);
   const bmrHistory = chronHistory.map((m) => m.bmr || 0);
+
+  // Contexte pour le retour santé par métrique (évaluation selon sexe / âge / poids).
+  const ctx: GuidanceContext = {
+    gender: activeProfile.gender,
+    age: calculateAge(activeProfile.birthdate),
+    weightKg: lastMeasurement ? parseFloat(lastMeasurement.weightKg) : 0,
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "32px" }}>
@@ -133,6 +141,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label={status.label}
                   progress={(bmi / 40) * 100}
                   historyValues={bmiHistory}
+                  guidance={getGuidance("bmi", bmi, ctx)}
                 />
               );
             })()}
@@ -151,6 +160,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label={status.label}
                   progress={fat}
                   historyValues={fatHistory}
+                  guidance={getGuidance("fat", fat, ctx)}
                 />
               );
             })()}
@@ -186,6 +196,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label={muscle > 42 ? "Excellente musculature" : "Musculature normale"}
                   progress={muscle}
                   historyValues={muscleHistory}
+                  guidance={getGuidance("muscle", muscle, ctx)}
                 />
               );
             })()}
@@ -203,6 +214,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label={water >= 50 ? "Hydratation optimale" : "Hydratation insuffisante"}
                   progress={water}
                   historyValues={waterHistory}
+                  guidance={getGuidance("water", water, ctx)}
                 />
               );
             })()}
@@ -220,6 +232,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label="Masse osseuse estimée"
                   progress={(bone / 6) * 100}
                   historyValues={boneHistory}
+                  guidance={getGuidance("bone", bone, ctx)}
                 />
               );
             })()}
@@ -238,6 +251,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                   label={status.label}
                   progress={(visceral / 20) * 100}
                   historyValues={visceralHistory}
+                  guidance={getGuidance("visceral", visceral, ctx)}
                 />
               );
             })()}
@@ -253,6 +267,7 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
                 label="Besoin métabolique quotidien"
                 progress={100}
                 historyValues={bmrHistory}
+                guidance={getGuidance("bmr", lastMeasurement.bmr, ctx)}
               />
             )}
           </div>
