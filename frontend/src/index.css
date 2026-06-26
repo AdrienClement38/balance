@@ -305,3 +305,29 @@ h1, h2, h3, h4, h5, h6 {
     align-items: flex-start;
   }
 }
+
+/* Retour santé : feuille du bas (mobile) + popover (desktop) */
+@keyframes guidanceSheetUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes guidanceFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.guidance-sheet {
+  animation: guidanceSheetUp 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.guidance-backdrop {
+  animation: guidanceFade 0.24s ease;
+}
+.guidance-popover {
+  animation: guidanceFade 0.14s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .guidance-sheet,
+  .guidance-backdrop,
+  .guidance-popover {
+    animation: none;
+  }
+}

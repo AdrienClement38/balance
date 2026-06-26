@@ -134,10 +134,18 @@ export function MetricCard({
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  // Positionne le popover (fixed) sous le bouton, élargi et borné à l'écran ;
-  // bascule au-dessus s'il déborderait en bas. Recalculé au scroll/redimension.
+  // Mobile-first : sur petit écran, le retour s'ouvre en feuille du bas (bottom sheet) ;
+  // sur grand écran, en popover ancré à la carte.
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 640);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Positionne le popover ANCRÉ (desktop). Sur mobile c'est une feuille du bas, pas de calcul.
   useLayoutEffect(() => {
-    if (!infoOpen) {
+    if (!infoOpen || isMobile) {
       setPos(null);
       return;
     }
@@ -171,7 +179,7 @@ export function MetricCard({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [infoOpen]);
+  }, [infoOpen, isMobile]);
 
   // Ferme au clic en dehors du popover (et du bouton) ou sur Échap.
   useEffect(() => {
@@ -191,6 +199,41 @@ export function MetricCard({
       document.removeEventListener("keydown", onKey);
     };
   }, [infoOpen]);
+
+  // Mobile : empêche le défilement du fond quand la feuille du bas est ouverte.
+  useEffect(() => {
+    if (!infoOpen || !isMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [infoOpen, isMobile]);
+
+  // Contenu du retour santé, partagé entre la feuille du bas (mobile) et le popover (desktop).
+  const guidanceBody = guidance ? (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+        <span style={{ width: "9px", height: "9px", borderRadius: "50%", background: STATUS_COLORS[guidance.status], flexShrink: 0 }} />
+        <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem" }}>{guidance.verdict}</strong>
+      </div>
+      <p style={{ margin: 0 }}>{guidance.explanation}</p>
+      {guidance.tips.length > 0 && (
+        <div style={{ marginTop: "12px" }}>
+          <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.8rem" }}>
+            Pour l'améliorer :
+          </span>
+          <ul style={{ margin: "6px 0 0", paddingLeft: "18px" }}>
+            {guidance.tips.map((t, i) => (
+              <li key={i} style={{ marginBottom: "5px" }}>
+                {t}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  ) : null;
 
   return (
     <div className={`glass-panel metric-card ${category}`} style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
@@ -288,49 +331,71 @@ export function MetricCard({
       {guidance &&
         infoOpen &&
         createPortal(
-          <div
-            ref={popRef}
-            role="dialog"
-            aria-label={guidance.verdict}
-            style={{
-              position: "fixed",
-              top: pos?.top ?? -9999,
-              left: pos?.left ?? 0,
-              width: pos?.width ?? 360,
-              maxHeight: "calc(100vh - 24px)",
-              overflowY: "auto",
-              visibility: pos ? "visible" : "hidden",
-              zIndex: 1000,
-              background: "var(--bg-secondary)",
-              border: "1px solid var(--glass-border)",
-              borderRadius: "var(--radius-md)",
-              boxShadow: "0 16px 40px -12px rgba(0, 0, 0, 0.6)",
-              padding: "14px 16px",
-              fontSize: "0.82rem",
-              color: "var(--text-secondary)",
-              lineHeight: 1.55,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-              <span style={{ width: "9px", height: "9px", borderRadius: "50%", background: STATUS_COLORS[guidance.status], flexShrink: 0 }} />
-              <strong style={{ color: "var(--text-primary)", fontSize: "0.9rem" }}>{guidance.verdict}</strong>
-            </div>
-            <p style={{ margin: 0 }}>{guidance.explanation}</p>
-            {guidance.tips.length > 0 && (
-              <div style={{ marginTop: "10px" }}>
-                <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "0.78rem" }}>
-                  Pour l'améliorer :
-                </span>
-                <ul style={{ margin: "6px 0 0", paddingLeft: "18px" }}>
-                  {guidance.tips.map((t, i) => (
-                    <li key={i} style={{ marginBottom: "4px" }}>
-                      {t}
-                    </li>
-                  ))}
-                </ul>
+          isMobile ? (
+            // --- Mobile : feuille du bas (bottom sheet) avec fond assombri ---
+            <>
+              <div
+                className="guidance-backdrop"
+                style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.5)", zIndex: 999 }}
+              />
+              <div
+                ref={popRef}
+                role="dialog"
+                aria-label={guidance.verdict}
+                className="guidance-sheet"
+                style={{
+                  position: "fixed",
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  zIndex: 1000,
+                  maxHeight: "85vh",
+                  overflowY: "auto",
+                  background: "var(--bg-secondary)",
+                  borderTopLeftRadius: "var(--radius-lg)",
+                  borderTopRightRadius: "var(--radius-lg)",
+                  borderTop: "1px solid var(--glass-border)",
+                  boxShadow: "0 -10px 40px -8px rgba(0, 0, 0, 0.6)",
+                  padding: "8px 20px calc(24px + env(safe-area-inset-bottom))",
+                  fontSize: "0.9rem",
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.55,
+                }}
+              >
+                {/* poignée de glissement (affordance) */}
+                <div style={{ width: "40px", height: "4px", borderRadius: "2px", background: "var(--glass-border)", margin: "6px auto 16px" }} />
+                {guidanceBody}
               </div>
-            )}
-          </div>,
+            </>
+          ) : (
+            // --- Desktop : popover ancré à la carte ---
+            <div
+              ref={popRef}
+              role="dialog"
+              aria-label={guidance.verdict}
+              className="guidance-popover"
+              style={{
+                position: "fixed",
+                top: pos?.top ?? -9999,
+                left: pos?.left ?? 0,
+                width: pos?.width ?? 360,
+                maxHeight: "calc(100vh - 24px)",
+                overflowY: "auto",
+                visibility: pos ? "visible" : "hidden",
+                zIndex: 1000,
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: "var(--radius-md)",
+                boxShadow: "0 16px 40px -12px rgba(0, 0, 0, 0.6)",
+                padding: "14px 16px",
+                fontSize: "0.82rem",
+                color: "var(--text-secondary)",
+                lineHeight: 1.55,
+              }}
+            >
+              {guidanceBody}
+            </div>
+          ),
           document.body
         )}
     </div>
