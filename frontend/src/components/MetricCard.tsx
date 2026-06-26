@@ -93,14 +93,19 @@ function Sparkline({ values, color, gradId, unit }: SparklineProps) {
           width={width}
           height={height}
           fill="transparent"
-          style={{ touchAction: "pan-y", cursor: "crosshair" }}
+          style={{ touchAction: "none" }}
           onPointerDown={(e) => {
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* non supporté */ }
             const svg = e.currentTarget.ownerSVGElement;
             if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
           }}
           onPointerMove={(e) => {
             const svg = e.currentTarget.ownerSVGElement;
             if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
+          }}
+          onPointerUp={(e) => {
+            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* idem */ }
+            setActiveIdx(null);
           }}
           onPointerLeave={() => setActiveIdx(null)}
         />
