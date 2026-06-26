@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Measurement } from "../services/api.ts";
 import { calculateFfm } from "../lib/bodyMetrics.ts";
+import { nearestIndexByX } from "../lib/chart.ts";
 import { TrendingUp } from "lucide-react";
 
 interface BiaChartProps {
@@ -239,21 +240,29 @@ export function BiaChart({ history }: BiaChartProps) {
                     {p.date}
                   </text>
                 )}
-                {/* Cible élargie : survol (desktop) et appui (mobile) */}
-                <circle
-                  cx={p.x}
-                  cy={p.y}
-                  r={16}
-                  fill="transparent"
-                  style={{ cursor: "pointer" }}
-                  onMouseEnter={() => setActiveIdx(i)}
-                  onMouseLeave={() => setActiveIdx(null)}
-                  onTouchStart={() => setActiveIdx(i)}
-                  onTouchEnd={() => setActiveIdx(null)}
-                />
               </g>
             );
           })}
+
+          {/* Zone de capture sur tout le graphe : suit le pointeur / le doigt et
+              sélectionne le point le plus proche en X (mode « nearest » + glissé tactile). */}
+          <rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ touchAction: "pan-y", cursor: "crosshair" }}
+            onPointerDown={(e) => {
+              const svg = e.currentTarget.ownerSVGElement;
+              if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
+            }}
+            onPointerMove={(e) => {
+              const svg = e.currentTarget.ownerSVGElement;
+              if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
+            }}
+            onPointerLeave={() => setActiveIdx(null)}
+          />
 
           {/* Infobulle du point actif (date + valeur) */}
           {activeIdx !== null && points[activeIdx] && (() => {

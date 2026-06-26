@@ -1,4 +1,5 @@
 import { ReactNode, useId, useState } from "react";
+import { nearestIndexByX } from "../lib/chart.ts";
 
 interface MetricCardProps {
   title: string;
@@ -84,21 +85,25 @@ function Sparkline({ values, color, gradId, unit }: SparklineProps) {
           <circle cx={points[activeIdx].x} cy={points[activeIdx].y} r="4" fill={color} stroke="var(--bg-primary)" strokeWidth="1.5" />
         )}
 
-        {/* Cibles élargies : survol (desktop) et appui (mobile) */}
-        {points.map((p, i) => (
-          <circle
-            key={i}
-            cx={p.x}
-            cy={p.y}
-            r="10"
-            fill="transparent"
-            style={{ cursor: "pointer" }}
-            onMouseEnter={() => setActiveIdx(i)}
-            onMouseLeave={() => setActiveIdx(null)}
-            onTouchStart={() => setActiveIdx(i)}
-            onTouchEnd={() => setActiveIdx(null)}
-          />
-        ))}
+        {/* Zone de capture : suit le pointeur / le doigt et sélectionne le point
+            le plus proche en X (mode « nearest » + glissé tactile). */}
+        <rect
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+          fill="transparent"
+          style={{ touchAction: "pan-y", cursor: "crosshair" }}
+          onPointerDown={(e) => {
+            const svg = e.currentTarget.ownerSVGElement;
+            if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
+          }}
+          onPointerMove={(e) => {
+            const svg = e.currentTarget.ownerSVGElement;
+            if (svg) setActiveIdx(nearestIndexByX(e.clientX, svg, points.map((p) => p.x), width));
+          }}
+          onPointerLeave={() => setActiveIdx(null)}
+        />
 
         {/* Infobulle de la valeur du point actif */}
         {activeIdx !== null && (() => {
