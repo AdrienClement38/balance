@@ -37,9 +37,15 @@ export interface FrameLogEntry {
 }
 
 const MAX_LOG = 120; // assez large pour conserver les trames de finalisation d'une pesée complète
-const IMPEDANCE_WAIT_MS = 8000; // attente max de l'impédance après un poids stable
-const SETTLE_MS = 10000; // repli poids-seul si le poids est figé et qu'aucune analyse ne démarre
-const ANALYSIS_WAIT_MS = 20000; // attente max de l'impédance pendant l'analyse de composition
+
+// --- Stabilisation du protocole "AC" (FitTrack Dara) ---
+// On NE conclut PAS sur un minuteur d'inactivité : on attend que le poids soit réellement
+// STABILISÉ (resté dans ±0,1 kg d'une base pendant STABLE_HOLD_MS), puis l'impédance.
+const STABLE_HOLD_MS = 1500; // durée pendant laquelle le poids doit rester stable -> verrouillé
+const STABLE_TOLERANCE_RAW = 1; // 1 unité brute = 0,1 kg (diviseur /10)
+const MIN_BODY_RAW = 100; // 10,0 kg : en dessous, personne n'est (encore) vraiment sur la balance
+const IMPEDANCE_WAIT_MS = 8000; // après un poids stabilisé, attente max de l'impédance -> sinon poids seul
+const IMPEDANCE_DEBOUNCE_MS = 1000; // après réception de l'impédance, court délai avant de conclure
 
 // Services candidats déclarés à requestDevice (sinon Web Bluetooth bloque leur accès).
 // Couvre QN Type 1 (FFE0), QN Type 2 (FFF0), les services GATT standards de pesée,
@@ -132,9 +138,10 @@ export function useBluetoothScale() {
   const protocolTypeRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
   const completedRef = useRef<boolean>(false);
-  const stableWeightRef = useRef<number>(0);
-  const lastRawRef = useRef<number>(0); // dernier poids brut, pour détecter la stabilité
-  const acImpedanceRef = useRef<number>(0); // impédance décodée des trames de finalisation AC
+  const stableWeightRef = useRef<number>(0); // poids stabilisé VERROUILLÉ (0 = pas encore stable)
+  const stableBaselineRef = useRef<number>(0); // poids brut de référence pour mesurer la dérive
+  const liveWeightKgRef = useRef<number>(0); // dernier poids en direct (capturé à la stabilisation)
+  const acImpedanceRef = useRef<number>(0); // impédance plausible décodée des trames de finalisation AC
   const impedanceTimerRef = useRef<number | undefined>(undefined);
   const settleTimerRef = useRef<number | undefined>(undefined);
   const userClosingRef = useRef<boolean>(false); // déconnexion volontaire (pas une erreur)
@@ -286,53 +293,61 @@ export function useBluetoothScale() {
       // 5) Protocole "AC" (FitTrack Dara, service FFB0, opcode 0xac).
       const ac = parseAcFrame(bytes);
       if (ac) {
+        // Programme la conclusion de la pesée (poids stabilisé + impédance retenue).
+        const finishWith = (delayMs: number) => {
+          if (impedanceTimerRef.current !== undefined) clearTimeout(impedanceTimerRef.current);
+          impedanceTimerRef.current = window.setTimeout(
+            () => complete(stableWeightRef.current, acImpedanceRef.current),
+            delayMs
+          );
+        };
+
         if (ac.kind === "weight") {
           setCurrentWeight(ac.weightKg);
-          if (ac.weightKg > 0) stableWeightRef.current = ac.weightKg;
+          liveWeightKgRef.current = ac.weightKg;
           log(bytes, `[AC] poids ${ac.weightKg.toFixed(1)} kg`, ac.checksumOk);
 
-          // Stabilité par inactivité : on (re)lance un minuteur à chaque variation notable
-          // (> ~0,3 kg). S'il expire sans nouvelle variation, le poids est figé -> on conclut.
-          if (Math.abs(ac.raw - lastRawRef.current) > 3) {
-            lastRawRef.current = ac.raw;
-            setConnectionState("stabilizing");
-            if (settleTimerRef.current !== undefined) clearTimeout(settleTimerRef.current);
-            settleTimerRef.current = window.setTimeout(() => {
-              if (!completedRef.current && stableWeightRef.current > 0) {
-                setConnectionState("measuring_impedance");
-                complete(stableWeightRef.current, 0);
-              }
-            }, SETTLE_MS);
-          }
-        } else {
-          // Phase de finalisation (0xfd/0xfe). La 1ʳᵉ trame (00 00) = "analyse qui démarre" ;
-          // l'impédance réelle arrive dans une trame ultérieure (ex. fd 01 01 9e -> 414 Ω).
-          if (settleTimerRef.current !== undefined) {
-            clearTimeout(settleTimerRef.current);
-            settleTimerRef.current = undefined;
-          }
-          setConnectionState("measuring_impedance");
+          // Personne pas (encore) vraiment sur la balance -> on ne stabilise pas.
+          if (ac.raw < MIN_BODY_RAW) return;
 
-          if (ac.impedanceOhms > 0) {
-            // Impédance reçue -> on conclut vite avec la vraie composition corporelle.
-            acImpedanceRef.current = ac.impedanceOhms;
-            setCurrentImpedance(ac.impedanceOhms);
-            log(bytes, `[AC] impédance ${ac.impedanceOhms} Ω`, ac.checksumOk);
-            if (impedanceTimerRef.current !== undefined) clearTimeout(impedanceTimerRef.current);
-            impedanceTimerRef.current = window.setTimeout(
-              () => complete(stableWeightRef.current, acImpedanceRef.current),
-              1200
-            );
-          } else if (impedanceTimerRef.current === undefined && stableWeightRef.current > 0) {
-            // Top-départ de l'analyse : on patiente (l'impédance peut mettre plusieurs secondes).
-            log(bytes, "[AC] analyse de la composition en cours… restez sur la balance.", ac.checksumOk);
-            impedanceTimerRef.current = window.setTimeout(
-              () => complete(stableWeightRef.current, acImpedanceRef.current),
-              ANALYSIS_WAIT_MS
-            );
-          } else {
-            log(bytes, `[AC] analyse (type 0x${ac.type.toString(16)})…`, ac.checksumOk);
+          // STABILISATION : le poids doit rester dans ±0,1 kg d'une base de référence
+          // pendant STABLE_HOLD_MS. On (re)lance le minuteur dès que la dérive dépasse la
+          // tolérance ; tant qu'il n'a pas expiré, le poids n'est PAS considéré stable.
+          if (stableWeightRef.current === 0) {
+            const drift = Math.abs(ac.raw - stableBaselineRef.current);
+            if (settleTimerRef.current === undefined || drift > STABLE_TOLERANCE_RAW) {
+              stableBaselineRef.current = ac.raw; // nouvelle base de référence
+              setConnectionState("stabilizing");
+              if (settleTimerRef.current !== undefined) clearTimeout(settleTimerRef.current);
+              settleTimerRef.current = window.setTimeout(() => {
+                settleTimerRef.current = undefined;
+                if (completedRef.current || stableWeightRef.current !== 0) return;
+                // Poids verrouillé sur la valeur stabilisée courante.
+                stableWeightRef.current = liveWeightKgRef.current;
+                setConnectionState("measuring_impedance");
+                log(bytes, `[AC] poids stabilisé à ${stableWeightRef.current.toFixed(1)} kg`, ac.checksumOk);
+                // Impédance déjà reçue -> conclure ; sinon l'attendre puis conclure en poids seul.
+                finishWith(acImpedanceRef.current > 0 ? IMPEDANCE_DEBOUNCE_MS : IMPEDANCE_WAIT_MS);
+              }, STABLE_HOLD_MS);
+            }
+            // sinon : dans la tolérance -> on laisse le minuteur de stabilisation courir.
           }
+          return;
+        }
+
+        // Trame de finalisation : impédance (déjà filtrée sur une plage plausible ; 0 sinon).
+        if (ac.impedanceOhms > 0) {
+          acImpedanceRef.current = ac.impedanceOhms;
+          setCurrentImpedance(ac.impedanceOhms);
+          log(bytes, `[AC] impédance ${ac.impedanceOhms} Ω`, ac.checksumOk);
+          // Si le poids est déjà stabilisé, on conclut (petit délai pour une éventuelle MAJ).
+          if (stableWeightRef.current > 0) {
+            setConnectionState("measuring_impedance");
+            finishWith(IMPEDANCE_DEBOUNCE_MS);
+          }
+          // sinon : on garde l'impédance, la stabilisation du poids l'utilisera.
+        } else {
+          log(bytes, `[AC] analyse en cours (type 0x${ac.type.toString(16)})…`, ac.checksumOk);
         }
         return;
       }
@@ -375,7 +390,8 @@ export function useBluetoothScale() {
     completedRef.current = false;
     userClosingRef.current = false;
     stableWeightRef.current = 0;
-    lastRawRef.current = 0;
+    stableBaselineRef.current = 0;
+    liveWeightKgRef.current = 0;
     acImpedanceRef.current = 0;
     divisorRef.current = 100;
 
