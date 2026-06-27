@@ -131,6 +131,29 @@ describe("parseAcFrame (protocole FFB0 / FitTrack Dara, trames réelles capturé
     expect(r!.checksumOk).toBe(true);
   });
 
+  it("ignore une impédance sentinelle aberrante (0xFE00 = 65024)", () => {
+    // octets [4..5] = 0xFE00 (65024) = « pas encore mesurée » -> ne JAMAIS l'enregistrer
+    const cks = (0xfd + 0x00 + 0xfe + 0x00 + 0xcb) & 0xff;
+    const r = parseAcFrame(frame(0xac, 0x02, 0xfd, 0x00, 0xfe, 0x00, 0xcb, cks));
+    expect(r!.kind).toBe("final");
+    expect(r!.impedanceOhms).toBe(0);
+    expect(r!.checksumOk).toBe(true);
+  });
+
+  it("ignore une impédance trop basse (< 100 Ω, bruit)", () => {
+    // octets [4..5] = 0x0032 = 50 Ω -> implausible -> 0
+    const cks = (0xfd + 0x00 + 0x00 + 0x32 + 0xcb) & 0xff;
+    const r = parseAcFrame(frame(0xac, 0x02, 0xfd, 0x00, 0x00, 0x32, 0xcb, cks));
+    expect(r!.impedanceOhms).toBe(0);
+  });
+
+  it("conserve une impédance plausible (borne basse 100 Ω)", () => {
+    // octets [4..5] = 0x0064 = 100 Ω -> conservée
+    const cks = (0xfd + 0x00 + 0x00 + 0x64 + 0xcb) & 0xff;
+    const r = parseAcFrame(frame(0xac, 0x02, 0xfd, 0x00, 0x00, 0x64, 0xcb, cks));
+    expect(r!.impedanceOhms).toBe(100);
+  });
+
   it("détecte un checksum invalide", () => {
     const r = parseAcFrame(frame(0xac, 0x02, 0x00, 0x1e, 0x00, 0x00, 0xce, 0x00));
     expect(r!.checksumOk).toBe(false);

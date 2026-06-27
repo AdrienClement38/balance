@@ -137,6 +137,7 @@ export function useBluetoothScale() {
   const acImpedanceRef = useRef<number>(0); // impédance décodée des trames de finalisation AC
   const impedanceTimerRef = useRef<number | undefined>(undefined);
   const settleTimerRef = useRef<number | undefined>(undefined);
+  const userClosingRef = useRef<boolean>(false); // déconnexion volontaire (pas une erreur)
 
   const log = useCallback((bytes: Uint8Array, note: string, checksumOk: boolean | null) => {
     const entry: FrameLogEntry = {
@@ -176,6 +177,7 @@ export function useBluetoothScale() {
 
   const disconnect = useCallback(() => {
     clearTimers();
+    userClosingRef.current = true; // déconnexion volontaire -> ne pas la traiter en erreur
     if (gattServerRef.current && gattServerRef.current.connected) {
       gattServerRef.current.disconnect();
     }
@@ -371,6 +373,7 @@ export function useBluetoothScale() {
     setFinalMeasurement(null);
     setFrameLog([]);
     completedRef.current = false;
+    userClosingRef.current = false;
     stableWeightRef.current = 0;
     lastRawRef.current = 0;
     acImpedanceRef.current = 0;
@@ -423,11 +426,18 @@ export function useBluetoothScale() {
       if (listenerDeviceRef.current !== device) {
         listenerDeviceRef.current = device;
         device.addEventListener("gattserverdisconnected", () => {
-          if (!completedRef.current) {
-            setConnectionState("disconnected");
-            clearTimers();
-          }
           console.log("[balance] balance déconnectée.");
+          if (completedRef.current) return; // fin normale après une pesée réussie
+          clearTimers();
+          if (!userClosingRef.current && stableWeightRef.current > 0) {
+            // Déconnexion EN PLEINE pesée -> message explicite (évite le « ça plante sans message »).
+            setErrorMsg(
+              "La balance s'est déconnectée avant la fin de la pesée. Restez bien immobile sur la balance jusqu'à l'affichage du résultat, puis relancez une pesée."
+            );
+            setConnectionState("error");
+          } else {
+            setConnectionState("disconnected");
+          }
         });
       }
 

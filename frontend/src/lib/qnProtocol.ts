@@ -129,6 +129,12 @@ export const OP_AC = 0xac;
 // Diviseur du poids : 1/10 kg. Confirmé sur le matériel réel (trame 0x00f7 = 247 -> 24,7 kg).
 export const AC_WEIGHT_DIVISOR = 10;
 
+// Plage d'impédance PLAUSIBLE (Ω) pour une mesure pied-à-pied. En dehors, c'est une
+// valeur sentinelle « pas encore mesurée » (ex. 0x0000, 0xFE00 = 65024, 0xFFFF = 65535)
+// ou du bruit : on l'ignore (impédance = 0) pour ne jamais enregistrer une mesure faussée.
+export const AC_IMPEDANCE_MIN = 100;
+export const AC_IMPEDANCE_MAX = 1500;
+
 export interface AcFrame {
   kind: "weight" | "final";
   weightKg: number;
@@ -163,13 +169,18 @@ export function parseAcFrame(bytes: Uint8Array): AcFrame | null {
   }
 
   // Trame de finalisation (type 0xfd / 0xfe) : poids verrouillé / composition corporelle.
-  // Hypothèse : l'impédance est portée par les octets [4..5] (ex. 01 9e -> 414 Ω) — À VALIDER.
+  // Hypothèse : l'impédance est portée par les octets [4..5] (ex. 01 9e -> 414 Ω).
+  // On ne retient l'impédance que si elle est PLAUSIBLE — sinon c'est une sentinelle
+  // « pas encore mesurée » (ex. 0xFE00 = 65024) qu'il ne faut surtout pas enregistrer.
+  const rawImpedance = (bytes[4] << 8) | bytes[5];
+  const impedanceOhms =
+    rawImpedance >= AC_IMPEDANCE_MIN && rawImpedance <= AC_IMPEDANCE_MAX ? rawImpedance : 0;
   return {
     kind: "final",
     weightKg: 0,
     stable: false,
     raw: 0,
-    impedanceOhms: (bytes[4] << 8) | bytes[5],
+    impedanceOhms,
     type,
     phase,
     checksumOk,

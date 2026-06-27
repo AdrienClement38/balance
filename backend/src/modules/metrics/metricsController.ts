@@ -9,8 +9,15 @@ import { broadcastToUser } from "../../config/websocket.js";
 // Input validation
 export const createMeasurementSchema = z.object({
   profileId: z.string().uuid("ID de profil invalide"),
-  weightKg: z.number().min(5, "Poids minimal : 5kg").max(200, "Poids maximal : 200kg"),
-  impedanceOhms: z.number().int().min(0).max(2000), // 0 = non mesuré
+  weightKg: z.number().min(5, "Poids minimal : 5kg").max(300, "Poids maximal : 300kg"),
+  // Hors plage plausible (ex. sentinelle 0xFE00 = 65024 « pas encore mesurée ») -> 0
+  // (non mesurée). On ne REJETTE JAMAIS une pesée valide à cause d'une impédance aberrante :
+  // le calcul BIA bascule alors proprement sur une estimation sans impédance.
+  impedanceOhms: z
+    .number()
+    .int()
+    .catch(0)
+    .transform((v) => (v > 0 && v <= 2000 ? v : 0)),
 });
 
 export type CreateMeasurementInput = z.infer<typeof createMeasurementSchema>;
