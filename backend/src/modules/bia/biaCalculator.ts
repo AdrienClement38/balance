@@ -36,7 +36,7 @@ export function calculateBia(input: BiaInput): BiaResult {
     );
     const waterPct = Number(((100 - fatPct) * 0.73).toFixed(2));
     const musclePct = Number(((100 - fatPct) * 0.8).toFixed(2));
-    const boneMassKg = Number((weightKg * (gender === "male" ? 0.045 : 0.04)).toFixed(2));
+    const boneMassKg = estimateBoneMassKg(gender, weightKg);
     const visceralFat = Math.max(1, Math.round(0.2 * fatPct + 0.1 * bmi - 3));
     const bmr = calculateBmr(weightKg, heightCm, ageYears, gender);
 
@@ -85,16 +85,10 @@ export function calculateBia(input: BiaInput): BiaResult {
     if (fatPct > 55) fatPct = 55;
   }
 
-  // 5. Calcul de la Masse Osseuse (Bone Mass)
-  let boneMassKg = 0;
-  if (gender === "male") {
-    boneMassKg = ffm * 0.045; // ~4.5% de la masse maigre
-  } else {
-    boneMassKg = ffm * 0.040; // ~4% de la masse maigre
-  }
-  // Limites
-  if (boneMassKg < 1) boneMassKg = 1;
-  if (boneMassKg > 8) boneMassKg = 8;
+  // 5. Masse osseuse : quasi STABLE chez l'adulte -> estimée à partir du sexe + poids
+  // uniquement (mêmes valeurs avec ou sans impédance), pour ne pas zigzaguer d'une
+  // pesée à l'autre comme le ferait un pourcentage de la masse maigre.
+  const boneMassKg = estimateBoneMassKg(gender, weightKg);
 
   // 6. Calcul de la Masse Musculaire (Muscle Mass)
   // La masse musculaire représente la masse maigre moins les os et l'eau extra-cellulaire non musculaire.
@@ -124,6 +118,19 @@ export function calculateBia(input: BiaInput): BiaResult {
     bmr,
     visceralFat,
   };
+}
+
+/**
+ * Masse osseuse estimée (kg). La masse osseuse réelle évolue très lentement (mois/années),
+ * pas d'une pesée à l'autre : on l'estime donc de façon STABLE à partir du sexe et du poids
+ * uniquement (ni impédance, ni masse grasse), via une droite douce calée sur les valeurs de
+ * référence Tanita (femme ~1,95/2,40/2,90 kg ; homme ~2,66/3,29/3,69 kg selon le poids).
+ * Pente faible -> une variation de poids de ±1 kg ne change quasiment pas la valeur affichée.
+ * Ce n'est qu'une estimation : seul un examen DEXA mesure la vraie densité osseuse.
+ */
+function estimateBoneMassKg(gender: "male" | "female", weightKg: number): number {
+  const raw = gender === "male" ? 0.0215 * weightKg + 1.44 : 0.0238 * weightKg + 0.88;
+  return Number(Math.min(5, Math.max(1, raw)).toFixed(2));
 }
 
 /**

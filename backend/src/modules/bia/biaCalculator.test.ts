@@ -52,6 +52,19 @@ describe("calculateBia", () => {
     assert.ok(Number.isFinite(r.fatPct) && r.fatPct >= 3 && r.fatPct <= 60);
   });
 
+  it("masse osseuse STABLE : identique avec ou sans impédance (même poids)", () => {
+    const withImp = calculateBia(baseMale).boneMassKg;
+    const noImp = calculateBia({ ...baseMale, impedanceOhms: 0 }).boneMassKg;
+    assert.equal(withImp, noImp);
+  });
+
+  it("masse osseuse quasi stable pour une petite variation de poids (±0,5 kg)", () => {
+    const a = calculateBia({ ...baseMale, weightKg: 80.0 }).boneMassKg;
+    const b = calculateBia({ ...baseMale, weightKg: 80.5 }).boneMassKg;
+    // arrondie à 0,1 kg (l'affichage du graphique) -> doit être identique
+    assert.equal(Math.round(a * 10), Math.round(b * 10));
+  });
+
   it("augmente le taux de masse grasse quand l'impédance augmente (à profil constant)", () => {
     const low = calculateBia({ ...baseMale, impedanceOhms: 400 });
     const high = calculateBia({ ...baseMale, impedanceOhms: 700 });
