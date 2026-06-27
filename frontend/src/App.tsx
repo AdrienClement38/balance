@@ -3,14 +3,17 @@ import api, { Profile, Measurement } from "./services/api.ts";
 import AuthForm from "./components/AuthForm.tsx";
 import ProfileList from "./components/ProfileList.tsx";
 import Dashboard from "./components/Dashboard.tsx";
+import HouseholdPanel from "./components/HouseholdPanel.tsx";
 import { useRealtimeMeasurements } from "./hooks/useRealtimeMeasurements.ts";
-import { LogOut, User as UserIcon, Sun, Moon } from "lucide-react";
+import { LogOut, User as UserIcon, Sun, Moon, Home } from "lucide-react";
 
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(api.auth.isAuthenticated());
   const [currentUser, setCurrentUser] = useState(api.auth.getCurrentUser());
   const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
   const [history, setHistory] = useState<Measurement[]>([]);
+
+  const [showHousehold, setShowHousehold] = useState(false);
 
   // Thème clair/sombre (par défaut sombre)
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -96,6 +99,15 @@ export function App() {
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <button
+            onClick={() => setShowHousehold(true)}
+            className="btn btn-secondary"
+            style={{ padding: "8px", borderRadius: "50%", width: "38px", height: "38px" }}
+            title="Ma maison (partager la balance)"
+          >
+            <Home size={18} />
+          </button>
+
+          <button
             onClick={toggleTheme}
             className="btn btn-secondary"
             style={{ padding: "8px", borderRadius: "50%", width: "38px", height: "38px" }}
@@ -129,6 +141,8 @@ export function App() {
           </p>
         </div>
       )}
+
+      {showHousehold && <HouseholdPanel onClose={() => setShowHousehold(false)} />}
     </div>
   );
 }

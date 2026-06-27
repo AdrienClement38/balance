@@ -15,6 +15,13 @@
       "when": 1782499793644,
       "tag": "0001_vengeful_madelyne_pryor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1782557175996,
+      "tag": "0002_peaceful_boomerang",
+      "breakpoints": true
     }
   ]
 }

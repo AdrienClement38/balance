@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, integer, decimal, date } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, integer, decimal, date, primaryKey } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
@@ -7,6 +7,28 @@ export const users = pgTable("users", {
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// Une « maison » regroupe plusieurs comptes (emails) qui partagent la même balance.
+// Les DONNÉES restent privées à chaque membre : la maison ne fait que relier les comptes.
+export const households = pgTable("households", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  inviteCode: varchar("invite_code", { length: 16 }).notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Appartenance compte <-> maison. `userId` est UNIQUE : un compte n'est que dans une maison.
+export const householdMembers = pgTable(
+  "household_members",
+  {
+    householdId: uuid("household_id").references(() => households.id, { onDelete: "cascade" }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull().unique(),
+    role: varchar("role", { length: 20 }).notNull().default("member"), // 'owner' | 'member'
+    joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.householdId, t.userId] }) })
+);
 
 export const profiles = pgTable("profiles", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -78,3 +100,7 @@ export type Measurement = typeof measurements.$inferSelect;
 export type NewMeasurement = typeof measurements.$inferInsert;
 export type ErrorLog = typeof errorLogs.$inferSelect;
 export type NewErrorLog = typeof errorLogs.$inferInsert;
+export type Household = typeof households.$inferSelect;
+export type NewHousehold = typeof households.$inferInsert;
+export type HouseholdMember = typeof householdMembers.$inferSelect;
+export type NewHouseholdMember = typeof householdMembers.$inferInsert;

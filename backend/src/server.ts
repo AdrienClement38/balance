@@ -12,6 +12,7 @@ import { authRoutes } from "./modules/auth/authRoutes.js";
 import { profilesRoutes } from "./modules/profiles/profilesRoutes.js";
 import { metricsRoutes } from "./modules/metrics/metricsRoutes.js";
 import { errorsRoutes } from "./modules/errors/errorsRoutes.js";
+import { householdsRoutes } from "./modules/households/householdsRoutes.js";
 import { pool, runMigrations } from "./config/db.js";
 import { registerWebSocket } from "./config/websocket.js";
 
@@ -66,6 +67,7 @@ server.register(authRoutes, { prefix: "/api/auth" });
 server.register(profilesRoutes, { prefix: "/api/profiles" });
 server.register(metricsRoutes, { prefix: "/api/metrics" });
 server.register(errorsRoutes, { prefix: "/api/errors" });
+server.register(householdsRoutes, { prefix: "/api/households" });
 
 // Endpoint de santé (sur /healthz pour laisser "/" au frontend).
 server.get("/healthz", async () => {

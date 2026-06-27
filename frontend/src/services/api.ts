@@ -42,6 +42,29 @@ export interface ErrorLog {
   createdAt: string;
 }
 
+export interface Household {
+  id: string;
+  name: string;
+  inviteCode: string;
+  ownerId: string;
+  isOwner: boolean;
+  createdAt: string;
+}
+
+export interface HouseholdMember {
+  userId: string;
+  email: string;
+  role: string; // 'owner' | 'member'
+  joinedAt: string;
+  isMe: boolean;
+  isOwner: boolean;
+}
+
+export interface MyHousehold {
+  household: Household | null;
+  members: HouseholdMember[];
+}
+
 // Récupérer le token depuis le stockage local
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem("balance_jwt_token");
@@ -119,7 +142,14 @@ export const api = {
 
     getCurrentUser(): User | null {
       const userJson = localStorage.getItem("balance_user");
-      return userJson ? JSON.parse(userJson) : null;
+      if (!userJson || userJson === "undefined") return null;
+      try {
+        return JSON.parse(userJson);
+      } catch {
+        // Donnée corrompue : on nettoie plutôt que de faire planter toute l'app.
+        localStorage.removeItem("balance_user");
+        return null;
+      }
     },
 
     isAuthenticated(): boolean {
@@ -185,6 +215,32 @@ export const api = {
 
     async list(limit: number = 50): Promise<ErrorLog[]> {
       return apiFetch<ErrorLog[]>(`/errors?limit=${limit}`);
+    },
+  },
+
+  // --- Maison partagée (comptes reliés, données privées à chacun) ---
+  households: {
+    async getMine(): Promise<MyHousehold> {
+      return apiFetch<MyHousehold>("/households/me");
+    },
+    async create(name: string): Promise<Household> {
+      return apiFetch<Household>("/households", { method: "POST", body: JSON.stringify({ name }) });
+    },
+    async join(code: string): Promise<Household> {
+      return apiFetch<Household>("/households/join", { method: "POST", body: JSON.stringify({ code }) });
+    },
+    async rename(name: string): Promise<Household> {
+      return apiFetch<Household>("/households", { method: "PUT", body: JSON.stringify({ name }) });
+    },
+    async leave(): Promise<{ left?: boolean; disbanded?: boolean }> {
+      // Corps {} : Fastify rejette un POST application/json à corps vide.
+      return apiFetch("/households/leave", { method: "POST", body: "{}" });
+    },
+    async regenerateCode(): Promise<{ inviteCode: string }> {
+      return apiFetch("/households/regenerate-code", { method: "POST", body: "{}" });
+    },
+    async removeMember(userId: string): Promise<{ removed: boolean }> {
+      return apiFetch(`/households/members/${userId}`, { method: "DELETE", body: "{}" });
     },
   },
 };
