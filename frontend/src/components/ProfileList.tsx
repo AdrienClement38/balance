@@ -20,12 +20,20 @@ export function ProfileList({ activeProfile, onSelectProfile }: ProfileListProps
   
   const [error, setError] = useState<string | null>(null);
 
+  // Sélectionne un profil ET mémorise son id, pour le restaurer après un rechargement.
+  const selectProfile = (profile: Profile) => {
+    localStorage.setItem("balance_active_profile_id", profile.id);
+    onSelectProfile(profile);
+  };
+
   const fetchProfiles = async () => {
     try {
       const data = await api.profiles.list();
       setProfiles(data);
       if (data.length > 0 && !activeProfile) {
-        onSelectProfile(data[0]); // Sélectionner le premier profil par défaut
+        // Restaurer le dernier profil utilisé (sinon le premier).
+        const savedId = localStorage.getItem("balance_active_profile_id");
+        selectProfile(data.find((p) => p.id === savedId) ?? data[0]);
       }
     } catch (err: any) {
       console.error(err);
@@ -49,7 +57,7 @@ export function ProfileList({ activeProfile, onSelectProfile }: ProfileListProps
         heightCm,
       });
       setProfiles([...profiles, newProfile]);
-      onSelectProfile(newProfile);
+      selectProfile(newProfile);
       setShowAddModal(false);
       // Reset form
       setName("");
@@ -74,9 +82,10 @@ export function ProfileList({ activeProfile, onSelectProfile }: ProfileListProps
       setProfiles(updated);
       if (activeProfile?.id === id) {
         if (updated.length > 0) {
-          onSelectProfile(updated[0]);
+          selectProfile(updated[0]);
         } else {
           // Aucun profil restant
+          localStorage.removeItem("balance_active_profile_id");
           // @ts-ignore
           onSelectProfile(null);
         }
@@ -111,7 +120,7 @@ export function ProfileList({ activeProfile, onSelectProfile }: ProfileListProps
             return (
               <div
                 key={profile.id}
-                onClick={() => onSelectProfile(profile)}
+                onClick={() => selectProfile(profile)}
                 className="glass-panel"
                 style={{
                   minWidth: "180px",

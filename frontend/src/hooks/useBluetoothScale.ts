@@ -397,10 +397,19 @@ export function useBluetoothScale() {
 
     const nav = navigator as any;
 
+    // iOS/iPadOS : Apple impose le moteur WebKit à TOUS les navigateurs (Safari ET Chrome),
+    // et WebKit ne gère pas le Web Bluetooth. Ce n'est pas un bug de l'app : c'est bloqué côté OS.
+    const ua = navigator.userAgent || "";
+    const isIOS =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1);
+
     if (!nav.bluetooth) {
       setConnectionState("error");
       setErrorMsg(
-        "L'API Web Bluetooth n'est pas supportée ou activée sur ce navigateur. Utilisez Chrome/Edge/Opera en HTTPS."
+        isIOS
+          ? "Sur iPhone/iPad, aucun navigateur (Safari comme Chrome) ne gère le Bluetooth Web — c'est une limitation d'Apple, pas un bug de l'app. Solution : installe l'app gratuite « Bluefy – Web BLE Browser » depuis l'App Store, puis ouvre ce site DANS Bluefy. (Sinon, un téléphone Android ou un PC sous Chrome fonctionnent directement.)"
+          : "L'API Web Bluetooth n'est pas supportée ou activée sur ce navigateur. Utilisez Chrome/Edge/Opera en HTTPS (le Bluetooth Web n'existe pas sur iOS)."
       );
       return;
     }

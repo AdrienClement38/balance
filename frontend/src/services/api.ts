@@ -195,7 +195,11 @@ export const api = {
 
     async getHistory(profileId: string, limit: number = 50): Promise<Measurement[]> {
       return apiFetch<Measurement[]>(`/metrics/${profileId}?limit=${limit}`);
-    }
+    },
+
+    async delete(id: string): Promise<{ deleted: boolean }> {
+      return apiFetch<{ deleted: boolean }>(`/metrics/${id}`, { method: "DELETE", body: "{}" });
+    },
   },
 
   // --- Journal des erreurs de pesée ---

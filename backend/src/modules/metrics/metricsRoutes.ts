@@ -1,5 +1,9 @@
 import { FastifyInstance } from "fastify";
-import { createMeasurementHandler, getMeasurementsHandler } from "./metricsController.js";
+import {
+  createMeasurementHandler,
+  getMeasurementsHandler,
+  deleteMeasurementHandler,
+} from "./metricsController.js";
 
 export async function metricsRoutes(fastify: FastifyInstance) {
   // Hook de sécurité preHandler : vérification obligatoire du token JWT
@@ -13,4 +17,5 @@ export async function metricsRoutes(fastify: FastifyInstance) {
 
   fastify.post("/", createMeasurementHandler);
   fastify.get("/:profileId", getMeasurementsHandler);
+  fastify.delete("/:id", deleteMeasurementHandler);
 }

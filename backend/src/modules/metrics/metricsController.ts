@@ -93,6 +93,40 @@ export async function createMeasurementHandler(
   }
 }
 
+export async function deleteMeasurementHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+) {
+  try {
+    const userId = (request.user as { id: string }).id;
+    const measurementId = request.params.id;
+
+    // Propriété : la mesure doit appartenir à un profil de l'utilisateur courant.
+    const [row] = await db
+      .select({ id: measurements.id })
+      .from(measurements)
+      .innerJoin(profiles, eq(measurements.profileId, profiles.id))
+      .where(and(eq(measurements.id, measurementId), eq(profiles.userId, userId)))
+      .limit(1);
+
+    if (!row) {
+      return reply.status(404).send({
+        error: "Not Found",
+        message: "Mesure introuvable ou accès non autorisé.",
+      });
+    }
+
+    await db.delete(measurements).where(eq(measurements.id, measurementId));
+    return reply.status(200).send({ deleted: true });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      error: "Internal Server Error",
+      message: "Une erreur est survenue lors de la suppression de la mesure.",
+    });
+  }
+}
+
 export async function getMeasurementsHandler(
   request: FastifyRequest<{ Params: { profileId: string }; Querystring: { limit?: string } }>,
   reply: FastifyReply
