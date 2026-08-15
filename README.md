@@ -115,6 +115,33 @@ WebSocket sous `/ws`, la santé sous `/healthz`. Le serveur **refuse de démarre
 automatiquement sur `ALWAYSDATA_HTTPD_IP/PORT`. Variables : `NODE_ENV=production`,
 `DATABASE_URL`, `JWT_SECRET`.
 
+## 🔗 Envoi automatique vers l'app fitness (AC-KINETIK)
+
+Chaque pesée enregistrée peut être poussée automatiquement vers **AC-KINETIK**, où elle
+apparaît en temps réel sur tous les appareils du compte — sans aucune action manuelle.
+
+**Ce qui part** : le poids alimente le suivi de poids existant d'AC-KINETIK (il s'y fond
+comme une saisie manuelle) ; la composition corporelle (gras, muscle, eau, os, viscéral,
+métabolisme) alimente un bloc dédié de la page « Suivi ». La suppression d'une pesée dans
+Balance la retire aussi côté fitness.
+
+**Activation** — les trois variables sont requises, sinon rien n'est envoyé :
+
+| Variable | Rôle |
+| --- | --- |
+| `FITNESS_SYNC_URL` | Endpoint d'ingestion, ex. `https://ac-kinetik.alwaysdata.net/api/integrations/balance/weigh-in` |
+| `FITNESS_SYNC_SECRET` | Secret partagé, **identique** à `BALANCE_SYNC_SECRET` côté AC-KINETIK |
+| `FITNESS_SYNC_EMAILS` | Comptes concernés (emails séparés par des virgules) |
+
+**Sécurité** : chaque envoi est signé en HMAC-SHA256 (le secret ne circule jamais) et
+horodaté, ce qui rend une trame rejouée inutilisable. Côté AC-KINETIK, seuls les comptes
+listés dans `ADMIN_EMAILS` sont acceptés — une signature valide ne suffit pas à écrire
+chez quelqu'un d'autre.
+
+**Robustesse** : l'envoi est un effet de bord *best-effort* déclenché après la réponse. Il
+ne peut ni ralentir ni faire échouer une pesée. Après 3 tentatives, l'échec est tracé dans
+le journal d'erreurs du profil (code `fitness_sync_failed`), visible dans l'app.
+
 > ⚠️ **Avertissement santé** : les valeurs de composition corporelle sont estimées par
 > des formules empiriques de bio-impédance (BIA) et ne constituent pas un diagnostic
 > médical.

@@ -5,6 +5,7 @@ import { measurements, profiles } from "../../db/schema.js";
 import { and, desc, eq } from "drizzle-orm";
 import { calculateBia } from "../bia/biaCalculator.js";
 import { broadcastToUser } from "../../config/websocket.js";
+import { syncDeletion, syncWeighIn } from "../integrations/fitnessSync.js";
 
 // Input validation
 export const createMeasurementSchema = z.object({
@@ -27,7 +28,7 @@ export async function createMeasurementHandler(
   reply: FastifyReply
 ) {
   try {
-    const userId = (request.user as { id: string }).id;
+    const { id: userId, email } = request.user as { id: string; email: string };
     const { profileId, weightKg, impedanceOhms } = createMeasurementSchema.parse(request.body);
 
     // 1. Vérifier la possession du profil par l'utilisateur et récupérer ses détails
@@ -75,6 +76,28 @@ export async function createMeasurementHandler(
     // 5. Diffuser instantanément la pesée à tous les onglets/clients connectés de cet utilisateur
     broadcastToUser(userId, "new_measurement", newMeasurement);
 
+    // 6. Pousser vers l'app fitness (comptes déclarés uniquement). Volontairement SANS `await` :
+    //    la réponse ne doit pas attendre un service tiers, et son indisponibilité ne doit pas
+    //    faire échouer la pesée. Les échecs sont tracés dans le journal d'erreurs du profil.
+    syncWeighIn(
+      email,
+      profileId,
+      {
+        measurementId: newMeasurement.id,
+        measuredAt: new Date(newMeasurement.createdAt).toISOString(),
+        weightKg,
+        composition: {
+          fatPct: bia.fatPct,
+          musclePct: bia.musclePct,
+          waterPct: bia.waterPct,
+          boneMassKg: bia.boneMassKg,
+          bmr: bia.bmr,
+          visceralFat: bia.visceralFat,
+        },
+      },
+      request.log
+    );
+
     return reply.status(201).send(newMeasurement);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -98,12 +121,12 @@ export async function deleteMeasurementHandler(
   reply: FastifyReply
 ) {
   try {
-    const userId = (request.user as { id: string }).id;
+    const { id: userId, email } = request.user as { id: string; email: string };
     const measurementId = request.params.id;
 
     // Propriété : la mesure doit appartenir à un profil de l'utilisateur courant.
     const [row] = await db
-      .select({ id: measurements.id })
+      .select({ id: measurements.id, profileId: measurements.profileId })
       .from(measurements)
       .innerJoin(profiles, eq(measurements.profileId, profiles.id))
       .where(and(eq(measurements.id, measurementId), eq(profiles.userId, userId)))
@@ -117,6 +140,10 @@ export async function deleteMeasurementHandler(
     }
 
     await db.delete(measurements).where(eq(measurements.id, measurementId));
+
+    // Répercuter la suppression côté fitness, pour que les deux historiques restent alignés.
+    syncDeletion(email, row.profileId, measurementId, request.log);
+
     return reply.status(200).send({ deleted: true });
   } catch (error) {
     request.log.error(error);
