@@ -72,6 +72,20 @@ export function fitnessSyncConfigured(): boolean {
   return Boolean(process.env.FITNESS_SYNC_URL && process.env.FITNESS_SYNC_SECRET && fitnessSyncEmails().length);
 }
 
+/**
+ * Compte DESTINATAIRE côté app fitness.
+ *
+ * Les deux applications ont chacune leurs comptes, et rien n'oblige à s'y être inscrit avec la
+ * même adresse. `FITNESS_SYNC_EMAILS` dit QUI DÉCLENCHE l'envoi (un compte Balance) ;
+ * `FITNESS_SYNC_TARGET_EMAIL` dit OÙ ÇA ATTERRIT (un compte fitness). Sans cette seconde
+ * variable, on envoyait l'adresse de l'émetteur : si elle n'existe pas côté fitness, la pesée
+ * était acceptée poliment et jetée.
+ *
+ * Non définie -> on retombe sur l'adresse de l'émetteur (cas où c'est la même des deux côtés).
+ */
+export const fitnessSyncTargetEmail = (senderEmail: string): string =>
+  (process.env.FITNESS_SYNC_TARGET_EMAIL || senderEmail).trim().toLowerCase();
+
 /** Ce compte doit-il être synchronisé ? (Faux si l'intégration n'est pas configurée.) */
 export function shouldSync(email: string | undefined | null): boolean {
   if (!email || !fitnessSyncConfigured()) return false;
@@ -83,7 +97,14 @@ export function signBody(secret: string, timestamp: string, rawBody: string): st
   return createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex");
 }
 
-async function postSigned(rawBody: string): Promise<void> {
+/**
+ * `applied: false` = l'app fitness a bien reçu et validé la trame, mais n'a trouvé AUCUN compte
+ * pour l'adresse visée. Ce n'est pas une panne (réessayer n'y changera rien) mais ce n'est
+ * surtout pas un succès : c'est une erreur de configuration qui doit se voir.
+ */
+type SendOutcome = "ok" | "compte-introuvable" | "echec";
+
+async function postSigned(rawBody: string): Promise<{ applied: boolean }> {
   const url = process.env.FITNESS_SYNC_URL as string;
   const secret = process.env.FITNESS_SYNC_SECRET as string;
   const timestamp = Date.now().toString();
@@ -103,30 +124,16 @@ async function postSigned(rawBody: string): Promise<void> {
     const detail = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}${detail ? ` — ${detail.slice(0, 200)}` : ""}`);
   }
+  const data = (await res.json().catch(() => null)) as { applied?: boolean } | null;
+  // Absence du champ = version plus ancienne de l'app fitness : on lui fait confiance.
+  return { applied: data?.applied !== false };
 }
 
 /**
- * Envoie avec quelques tentatives espacées, puis journalise l'échec en base.
- * Ne rejette JAMAIS : c'est le contrat de l'appel « fire-and-forget » côté contrôleur.
- * Renvoie `true` si l'app fitness a bien accusé réception.
+ * Trace un échec dans le journal d'erreurs du profil, donc visible dans l'app Balance sans
+ * avoir à ouvrir les logs du serveur. Best-effort : si la base tombe aussi, on n'insiste pas.
  */
-async function sendBestEffort(body: unknown, profileId: string, log: Logger): Promise<boolean> {
-  const rawBody = JSON.stringify(body);
-  let lastError = "";
-
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    if (BACKOFF_MS[attempt]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
-    try {
-      await postSigned(rawBody);
-      if (attempt > 0) log.info(`[fitness-sync] Poussée réussie à la tentative ${attempt + 1}.`);
-      return true;
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      log.warn(`[fitness-sync] Tentative ${attempt + 1}/${ATTEMPTS} échouée : ${lastError}`);
-    }
-  }
-
-  log.error(`[fitness-sync] Abandon après ${ATTEMPTS} tentatives : ${lastError}`);
+async function journaliserEchec(profileId: string, message: string, log: Logger): Promise<void> {
   try {
     // Import PARESSEUX volontaire : `config/db.js` instancie PGlite au chargement du module.
     // Un import statique ici ouvrirait la base de développement rien qu'en important ce
@@ -136,13 +143,45 @@ async function sendBestEffort(body: unknown, profileId: string, log: Logger): Pr
     await db.insert(errorLogs).values({
       profileId,
       code: "fitness_sync_failed",
-      message: `Envoi vers l'app fitness impossible : ${lastError}`.slice(0, 500),
+      message: message.slice(0, 500),
     });
   } catch (err) {
-    // Le journal d'erreurs est un confort de diagnostic : s'il tombe aussi, on n'insiste pas.
     log.error(`[fitness-sync] Journalisation de l'échec impossible : ${(err as Error).message}`);
   }
-  return false;
+}
+
+/**
+ * Envoie avec quelques tentatives espacées, puis journalise l'échec en base.
+ * Ne rejette JAMAIS : c'est le contrat de l'appel « fire-and-forget » côté contrôleur.
+ */
+async function sendBestEffort(body: unknown, profileId: string, log: Logger): Promise<SendOutcome> {
+  const rawBody = JSON.stringify(body);
+  let lastError = "";
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (BACKOFF_MS[attempt]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+    try {
+      const { applied } = await postSigned(rawBody);
+      if (!applied) {
+        // Inutile de réessayer : la trame est valide, c'est la CIBLE qui n'existe pas.
+        const message =
+          "L'app fitness ne connaît aucun compte pour l'adresse visée : la pesée n'a pas été enregistrée là-bas. " +
+          "Vérifie FITNESS_SYNC_TARGET_EMAIL (côté Balance) et ADMIN_EMAILS (côté fitness).";
+        log.error(`[fitness-sync] ${message}`);
+        await journaliserEchec(profileId, message, log);
+        return "compte-introuvable";
+      }
+      if (attempt > 0) log.info(`[fitness-sync] Poussée réussie à la tentative ${attempt + 1}.`);
+      return "ok";
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      log.warn(`[fitness-sync] Tentative ${attempt + 1}/${ATTEMPTS} échouée : ${lastError}`);
+    }
+  }
+
+  log.error(`[fitness-sync] Abandon après ${ATTEMPTS} tentatives : ${lastError}`);
+  await journaliserEchec(profileId, `Envoi vers l'app fitness impossible : ${lastError}`, log);
+  return "echec";
 }
 
 /** Marque une pesée comme parvenue à l'app fitness (elle ne sera plus rejouée). */
@@ -218,9 +257,9 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
     let sent = 0;
     for (const r of pending) {
       const num = (v: string | null) => (v === null ? null : Number(v));
-      const ok = await sendBestEffort(
+      const issue = await sendBestEffort(
         {
-          email: r.email.trim().toLowerCase(),
+          email: fitnessSyncTargetEmail(r.email),
           deleted: false,
           measurementId: r.id,
           measuredAt: new Date(r.createdAt).toISOString(),
@@ -237,7 +276,10 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
         r.profileId,
         log
       );
-      if (!ok) break; // service toujours indisponible : on retentera plus tard
+      // On s'arrête au premier problème, quel qu'il soit : service encore à terre, ou cible
+      // mal configurée. Dans les deux cas, enchaîner les 49 suivantes ne ferait qu'empiler
+      // des échecs identiques dans le journal.
+      if (issue !== "ok") break;
       await markSynced(r.id, log);
       sent++;
     }
@@ -255,10 +297,16 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
 export function syncWeighIn(email: string, profileId: string, payload: WeighInPayload, log: Logger): void {
   if (!shouldSync(email)) return;
   void (async () => {
-    const ok = await sendBestEffort({ email: email.trim().toLowerCase(), deleted: false, ...payload }, profileId, log);
-    if (!ok) return; // l'app fitness ne répond pas : le rattrapage s'en chargera plus tard
+    const issue = await sendBestEffort(
+      { email: fitnessSyncTargetEmail(email), deleted: false, ...payload },
+      profileId,
+      log
+    );
+    // Pas « ok » : on ne marque PAS la pesée comme envoyée, elle repassera au rattrapage.
+    // Cas « compte-introuvable » compris : la configuration corrigée, elle remontera d'elle-même.
+    if (issue !== "ok") return;
     await markSynced(payload.measurementId, log);
-    // Elle répond : c'est le meilleur moment pour vider l'éventuel retard accumulé.
+    // L'app fitness répond : c'est le meilleur moment pour vider l'éventuel retard accumulé.
     await flushPendingWeighIns(log);
   })();
 }
@@ -266,5 +314,5 @@ export function syncWeighIn(email: string, profileId: string, payload: WeighInPa
 /** Pousse la suppression d'une pesée (l'entrée disparaît aussi côté fitness). */
 export function syncDeletion(email: string, profileId: string, measurementId: string, log: Logger): void {
   if (!shouldSync(email)) return;
-  void sendBestEffort({ email: email.trim().toLowerCase(), deleted: true, measurementId }, profileId, log);
+  void sendBestEffort({ email: fitnessSyncTargetEmail(email), deleted: true, measurementId }, profileId, log);
 }

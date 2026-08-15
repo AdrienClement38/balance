@@ -131,7 +131,13 @@ Balance la retire aussi côté fitness.
 | --- | --- |
 | `FITNESS_SYNC_URL` | Endpoint d'ingestion, ex. `https://ac-kinetik.alwaysdata.net/api/integrations/balance/weigh-in` |
 | `FITNESS_SYNC_SECRET` | Secret partagé, **identique** à `BALANCE_SYNC_SECRET` côté AC-KINETIK |
-| `FITNESS_SYNC_EMAILS` | Comptes concernés (emails séparés par des virgules) |
+| `FITNESS_SYNC_EMAILS` | **Qui déclenche** : l'email de connexion à **Balance** (plusieurs séparés par des virgules) |
+| `FITNESS_SYNC_TARGET_EMAIL` | **Où ça atterrit** : l'email de connexion à **AC-KINETIK**. Optionnel si c'est la même adresse des deux côtés |
+
+> ⚠️ Les deux applications ont des comptes distincts. Si tu ne t'y es pas inscrit avec la même
+> adresse, `FITNESS_SYNC_TARGET_EMAIL` est **obligatoire** : sans elle, Balance envoie sa propre
+> adresse, l'app fitness ne trouve aucun compte correspondant et la pesée est perdue. Ce cas est
+> désormais tracé dans le journal d'erreurs au lieu de passer pour un succès.
 
 **Sécurité** : chaque envoi est signé en HMAC-SHA256 (le secret ne circule jamais) et
 horodaté, ce qui rend une trame rejouée inutilisable. Côté AC-KINETIK, seuls les comptes

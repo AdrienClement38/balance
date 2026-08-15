@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { fitnessSyncConfigured, shouldSync, signBody } from "./fitnessSync.js";
+import { fitnessSyncConfigured, fitnessSyncTargetEmail, shouldSync, signBody } from "./fitnessSync.js";
 
 /**
  * Contrat d'envoi vers l'app fitness (AC-KINETIK).
@@ -12,7 +12,7 @@ import { fitnessSyncConfigured, shouldSync, signBody } from "./fitnessSync.js";
 
 /** Restaure l'environnement après chaque scénario (les variables pilotent tout le module). */
 function withEnv(vars: Record<string, string | undefined>, fn: () => void) {
-  const keys = ["FITNESS_SYNC_URL", "FITNESS_SYNC_SECRET", "FITNESS_SYNC_EMAILS"];
+  const keys = ["FITNESS_SYNC_URL", "FITNESS_SYNC_SECRET", "FITNESS_SYNC_EMAILS", "FITNESS_SYNC_TARGET_EMAIL"];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   try {
     for (const k of keys) delete process.env[k];
@@ -60,6 +60,25 @@ describe("signBody — contrat de signature avec AC-KINETIK", () => {
 
   test("un secret différent change la signature", () => {
     assert.notEqual(signBody("autre-secret", TS_REF, CORPS_REF), SIGNATURE_REF);
+  });
+});
+
+describe("fitnessSyncTargetEmail — compte destinataire", () => {
+  /**
+   * Les deux apps ont des comptes séparés : rien n'oblige à s'y être inscrit avec la même
+   * adresse. Envoyer celle de l'ÉMETTEUR quand elle n'existe pas côté fitness faisait
+   * silencieusement disparaître les pesées (l'app répond 202 applied:false).
+   */
+  test("vise l'adresse configurée, pas celle de l'émetteur", () => {
+    withEnv({ ...CONFIG, FITNESS_SYNC_TARGET_EMAIL: "Mon.Compte@Fitness.FR" }, () => {
+      assert.equal(fitnessSyncTargetEmail("moi@exemple.fr"), "mon.compte@fitness.fr");
+    });
+  });
+
+  test("retombe sur l'adresse de l'émetteur si aucune cible n'est configurée", () => {
+    withEnv(CONFIG, () => {
+      assert.equal(fitnessSyncTargetEmail("Moi@Exemple.FR"), "moi@exemple.fr");
+    });
   });
 });
 
