@@ -63,6 +63,10 @@ export const measurements = pgTable(
     bmr: integer("bmr"),
     visceralFat: integer("visceral_fat"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Envoi vers l'app fitness : NULL = pas encore parti. Sert au RATTRAPAGE — sans cette
+    // trace, une pesée perdue pendant une indisponibilité (typiquement un réveil à froid
+    // d'AlwaysData) ne serait jamais renvoyée, et l'oubli serait silencieux.
+    fitnessSyncedAt: timestamp("fitness_synced_at", { withTimezone: true }),
   },
   (t) => ({ profileCreatedIdx: index("measurements_profile_id_created_at_idx").on(t.profileId, t.createdAt) })
 );

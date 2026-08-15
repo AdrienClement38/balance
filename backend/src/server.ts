@@ -15,6 +15,7 @@ import { errorsRoutes } from "./modules/errors/errorsRoutes.js";
 import { householdsRoutes } from "./modules/households/householdsRoutes.js";
 import { pool, runMigrations } from "./config/db.js";
 import { registerWebSocket } from "./config/websocket.js";
+import { flushPendingWeighIns } from "./modules/integrations/fitnessSync.js";
 
 dotenv.config();
 
@@ -135,6 +136,11 @@ const start = async () => {
     await runMigrations();
     await server.listen({ port, host });
     server.log.info(`Serveur en écoute sur http://${host}:${port}`);
+
+    // Rattrapage des pesées jamais parvenues à l'app fitness (indisponibilité, redémarrage).
+    // Après le listen et sans await : le serveur doit répondre immédiatement, et ce rattrapage
+    // peut prendre un moment s'il faut réveiller un hébergement endormi.
+    void flushPendingWeighIns(server.log);
   } catch (err) {
     server.log.error(err);
     process.exit(1);

@@ -47,9 +47,18 @@ export interface WeighInPayload {
   composition: WeighInComposition | null;
 }
 
-const ATTEMPTS = 3;
-const ATTEMPT_TIMEOUT_MS = 5000;
-const BACKOFF_MS = [0, 1000, 4000];
+// Fenêtre volontairement large : sur le forfait gratuit AlwaysData, l'app fitness peut être
+// ENDORMIE et mettre plusieurs dizaines de secondes à répondre à la première requête. Une
+// fenêtre courte transformait ce réveil à froid — le cas le plus banal, la première pesée de
+// la journée — en échec. 4 tentatives réparties sur ~60 s, 10 s de patience chacune.
+const ATTEMPTS = 4;
+const ATTEMPT_TIMEOUT_MS = 10000;
+const BACKOFF_MS = [0, 2000, 8000, 20000];
+
+/** Pesées rejouées au maximum par passe de rattrapage (borne le travail et les appels). */
+const CATCHUP_LIMIT = 50;
+/** Au-delà, on ne rejoue plus : une pesée trop vieille n'a plus d'intérêt à remonter. */
+const CATCHUP_MAX_AGE_DAYS = 30;
 
 /** Comptes Balance dont les pesées sont poussées (emails, séparés par des virgules). */
 export const fitnessSyncEmails = (): string[] =>
@@ -99,8 +108,9 @@ async function postSigned(rawBody: string): Promise<void> {
 /**
  * Envoie avec quelques tentatives espacées, puis journalise l'échec en base.
  * Ne rejette JAMAIS : c'est le contrat de l'appel « fire-and-forget » côté contrôleur.
+ * Renvoie `true` si l'app fitness a bien accusé réception.
  */
-async function sendBestEffort(body: unknown, profileId: string, log: Logger): Promise<void> {
+async function sendBestEffort(body: unknown, profileId: string, log: Logger): Promise<boolean> {
   const rawBody = JSON.stringify(body);
   let lastError = "";
 
@@ -109,7 +119,7 @@ async function sendBestEffort(body: unknown, profileId: string, log: Logger): Pr
     try {
       await postSigned(rawBody);
       if (attempt > 0) log.info(`[fitness-sync] Poussée réussie à la tentative ${attempt + 1}.`);
-      return;
+      return true;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       log.warn(`[fitness-sync] Tentative ${attempt + 1}/${ATTEMPTS} échouée : ${lastError}`);
@@ -132,12 +142,125 @@ async function sendBestEffort(body: unknown, profileId: string, log: Logger): Pr
     // Le journal d'erreurs est un confort de diagnostic : s'il tombe aussi, on n'insiste pas.
     log.error(`[fitness-sync] Journalisation de l'échec impossible : ${(err as Error).message}`);
   }
+  return false;
+}
+
+/** Marque une pesée comme parvenue à l'app fitness (elle ne sera plus rejouée). */
+async function markSynced(measurementId: string, log: Logger): Promise<void> {
+  try {
+    const [{ db }, { measurements }, { eq }] = await Promise.all([
+      import("../../config/db.js"),
+      import("../../db/schema.js"),
+      import("drizzle-orm"),
+    ]);
+    await db.update(measurements).set({ fitnessSyncedAt: new Date() }).where(eq(measurements.id, measurementId));
+  } catch (err) {
+    // Pire cas : la pesée sera renvoyée une fois de trop. L'ingestion est idempotente
+    // (l'identifiant de synchro dérive de l'id de la pesée), donc c'est sans conséquence.
+    log.warn(`[fitness-sync] Marquage impossible pour ${measurementId} : ${(err as Error).message}`);
+  }
+}
+
+// Une seule passe de rattrapage à la fois : le démarrage du serveur et une pesée peuvent la
+// déclencher en même temps, et deux passes concurrentes enverraient tout en double.
+let catchupRunning = false;
+
+/**
+ * Rejoue les pesées qui ne sont jamais parvenues à l'app fitness.
+ *
+ * C'est ce qui rend l'envoi RÉELLEMENT automatique : sans rattrapage, une pesée émise pendant
+ * une indisponibilité était perdue pour toujours, en silence. Le cas courant n'est pas la
+ * panne mais le réveil à froid de l'hébergement.
+ *
+ * Déclenché (a) après une pesée envoyée avec succès — le service répond, c'est le bon moment,
+ * et (b) au démarrage du serveur, pour rattraper ce qui s'est accumulé pendant une coupure.
+ * S'arrête au premier échec : si l'app fitness est encore à terre, insister ne sert à rien.
+ */
+export async function flushPendingWeighIns(log: Logger): Promise<number> {
+  if (!fitnessSyncConfigured() || catchupRunning) return 0;
+  catchupRunning = true;
+  try {
+    const [{ db }, { measurements, profiles, users }, { and, asc, eq, gt, isNull }] = await Promise.all([
+      import("../../config/db.js"),
+      import("../../db/schema.js"),
+      import("drizzle-orm"),
+    ]);
+
+    const since = new Date(Date.now() - CATCHUP_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({
+        id: measurements.id,
+        profileId: measurements.profileId,
+        createdAt: measurements.createdAt,
+        weightKg: measurements.weightKg,
+        fatPct: measurements.fatPct,
+        musclePct: measurements.musclePct,
+        waterPct: measurements.waterPct,
+        boneMassKg: measurements.boneMassKg,
+        bmr: measurements.bmr,
+        visceralFat: measurements.visceralFat,
+        email: users.email,
+      })
+      .from(measurements)
+      .innerJoin(profiles, eq(measurements.profileId, profiles.id))
+      .innerJoin(users, eq(profiles.userId, users.id))
+      .where(and(isNull(measurements.fitnessSyncedAt), gt(measurements.createdAt, since)))
+      .orderBy(asc(measurements.createdAt))
+      .limit(CATCHUP_LIMIT);
+
+    // Les pesées des comptes non concernés sont marquées « envoyées » dès l'insertion : la file
+    // d'attente ne contient donc que des comptes éligibles. Le contrôle reste par sécurité, au
+    // cas où la liste blanche changerait entre l'insertion et le rattrapage.
+    const pending = rows.filter((r: { email: string }) => shouldSync(r.email));
+    if (pending.length === 0) return 0;
+
+    log.info(`[fitness-sync] Rattrapage : ${pending.length} pesée(s) à renvoyer.`);
+    let sent = 0;
+    for (const r of pending) {
+      const num = (v: string | null) => (v === null ? null : Number(v));
+      const ok = await sendBestEffort(
+        {
+          email: r.email.trim().toLowerCase(),
+          deleted: false,
+          measurementId: r.id,
+          measuredAt: new Date(r.createdAt).toISOString(),
+          weightKg: Number(r.weightKg),
+          composition: {
+            fatPct: num(r.fatPct),
+            musclePct: num(r.musclePct),
+            waterPct: num(r.waterPct),
+            boneMassKg: num(r.boneMassKg),
+            bmr: r.bmr,
+            visceralFat: r.visceralFat,
+          },
+        },
+        r.profileId,
+        log
+      );
+      if (!ok) break; // service toujours indisponible : on retentera plus tard
+      await markSynced(r.id, log);
+      sent++;
+    }
+    if (sent) log.info(`[fitness-sync] Rattrapage terminé : ${sent}/${pending.length} envoyée(s).`);
+    return sent;
+  } catch (err) {
+    log.error(`[fitness-sync] Rattrapage impossible : ${(err as Error).message}`);
+    return 0;
+  } finally {
+    catchupRunning = false;
+  }
 }
 
 /** Pousse une pesée. À appeler sans `await` (effet de bord après réponse). */
 export function syncWeighIn(email: string, profileId: string, payload: WeighInPayload, log: Logger): void {
   if (!shouldSync(email)) return;
-  void sendBestEffort({ email: email.trim().toLowerCase(), deleted: false, ...payload }, profileId, log);
+  void (async () => {
+    const ok = await sendBestEffort({ email: email.trim().toLowerCase(), deleted: false, ...payload }, profileId, log);
+    if (!ok) return; // l'app fitness ne répond pas : le rattrapage s'en chargera plus tard
+    await markSynced(payload.measurementId, log);
+    // Elle répond : c'est le meilleur moment pour vider l'éventuel retard accumulé.
+    await flushPendingWeighIns(log);
+  })();
 }
 
 /** Pousse la suppression d'une pesée (l'entrée disparaît aussi côté fitness). */
