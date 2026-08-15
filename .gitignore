@@ -33,7 +33,13 @@ Thumbs.db
 # IDEs and editors
 .idea/
 .vscode/
-.claude/
+
+# Outillage agent : le personnel reste local, mais le garde-fou navigateur et la
+# config des serveurs de dev DOIVENT être versionnés — sinon la protection décrite
+# dans CLAUDE.md n'existe plus sur un clone frais.
+.claude/*
+!.claude/settings.json
+!.claude/launch.json
 *.suo
 *.ntvs*
 *.njsproj

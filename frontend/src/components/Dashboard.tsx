@@ -4,15 +4,13 @@ import MetricCard from "./MetricCard.tsx";
 import BiaChart from "./BiaChart.tsx";
 import ErrorLogPanel from "./ErrorLogPanel.tsx";
 import MeasurementHistory from "./MeasurementHistory.tsx";
+import { calculateAge, calculateBmi, calculateFfm } from "../lib/bodyMetrics.ts";
 import {
-  calculateAge,
-  calculateBmi,
-  calculateFfm,
-  getBmiStatus,
-  getFatStatus,
-  getVisceralStatus,
-} from "../lib/bodyMetrics.ts";
-import { getGuidance, GuidanceContext } from "../lib/metricGuidance.ts";
+  getGuidance,
+  GuidanceContext,
+  MetricGuidance,
+  STATUS_CATEGORY,
+} from "../lib/metricGuidance.ts";
 import {
   Scale,
   Activity,
@@ -30,6 +28,16 @@ interface DashboardProps {
   activeProfile: Profile;
   history: Measurement[];
   onMeasurementSaved: () => void;
+}
+
+// Badge de la carte (couleur + libellé) dérivé de la guidance, pour que le badge et
+// le texte de guidance ne puissent pas se contredire. `fallback` ne sert que si la
+// métrique n'a pas de guidance (valeur absente ou métrique non évaluée).
+function cardStatus(guidance: MetricGuidance | null, fallback: string) {
+  return {
+    category: guidance ? STATUS_CATEGORY[guidance.status] : ("primary" as const),
+    label: guidance ? guidance.verdict : fallback,
+  };
 }
 
 export function Dashboard({ activeProfile, history, onMeasurementSaved }: DashboardProps) {
@@ -131,18 +139,19 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 2. IMC */}
             {(() => {
               const bmi = calculateBmi(parseFloat(lastMeasurement.weightKg), activeProfile.heightCm);
-              const status = getBmiStatus(bmi);
+              const guidance = getGuidance("bmi", bmi, ctx);
+              const status = cardStatus(guidance, "Indice de masse corporelle");
               return (
                 <MetricCard
                   title="Indice de Masse Corporelle (IMC)"
                   value={bmi.toFixed(1)}
                   unit=""
                   icon={<Activity size={20} />}
-                  category={status.cat}
+                  category={status.category}
                   label={status.label}
                   progress={(bmi / 40) * 100}
                   historyValues={bmiHistory}
-                  guidance={getGuidance("bmi", bmi, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
@@ -150,18 +159,19 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 3. Masse Grasse */}
             {lastMeasurement.fatPct && (() => {
               const fat = parseFloat(lastMeasurement.fatPct);
-              const status = getFatStatus(fat, activeProfile.gender);
+              const guidance = getGuidance("fat", fat, ctx);
+              const status = cardStatus(guidance, "Taux de masse grasse");
               return (
                 <MetricCard
                   title="Masse Grasse"
                   value={fat.toFixed(1)}
                   unit="%"
                   icon={<ShieldAlert size={20} />}
-                  category={status.cat}
+                  category={status.category}
                   label={status.label}
                   progress={fat}
                   historyValues={fatHistory}
-                  guidance={getGuidance("fat", fat, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
@@ -187,17 +197,19 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 5. Masse Musculaire */}
             {lastMeasurement.musclePct && (() => {
               const muscle = parseFloat(lastMeasurement.musclePct);
+              const guidance = getGuidance("muscle", muscle, ctx);
+              const status = cardStatus(guidance, "Masse musculaire");
               return (
                 <MetricCard
                   title="Masse Musculaire"
                   value={muscle.toFixed(1)}
                   unit="%"
                   icon={<Dumbbell size={20} />}
-                  category="success"
-                  label={muscle > 42 ? "Excellente musculature" : "Musculature normale"}
+                  category={status.category}
+                  label={status.label}
                   progress={muscle}
                   historyValues={muscleHistory}
-                  guidance={getGuidance("muscle", muscle, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
@@ -205,17 +217,19 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 6. Eau % */}
             {lastMeasurement.waterPct && (() => {
               const water = parseFloat(lastMeasurement.waterPct);
+              const guidance = getGuidance("water", water, ctx);
+              const status = cardStatus(guidance, "Masse hydrique");
               return (
                 <MetricCard
                   title="Masse Hydrique (Eau)"
                   value={water.toFixed(1)}
                   unit="%"
                   icon={<Droplet size={20} />}
-                  category="info"
-                  label={water >= 50 ? "Hydratation optimale" : "Hydratation insuffisante"}
+                  category={status.category}
+                  label={status.label}
                   progress={water}
                   historyValues={waterHistory}
-                  guidance={getGuidance("water", water, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
@@ -223,17 +237,19 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 7. Masse Osseuse */}
             {lastMeasurement.boneMassKg && (() => {
               const bone = parseFloat(lastMeasurement.boneMassKg);
+              const guidance = getGuidance("bone", bone, ctx);
+              const status = cardStatus(guidance, "Masse osseuse estimée");
               return (
                 <MetricCard
                   title="Masse Osseuse"
                   value={bone.toFixed(1)}
                   unit="kg"
                   icon={<Bone size={20} />}
-                  category="primary"
-                  label="Masse osseuse estimée"
+                  category={status.category}
+                  label={status.label}
                   progress={(bone / 6) * 100}
                   historyValues={boneHistory}
-                  guidance={getGuidance("bone", bone, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
@@ -241,36 +257,44 @@ export function Dashboard({ activeProfile, history, onMeasurementSaved }: Dashbo
             {/* 8. Graisse Viscérale */}
             {lastMeasurement.visceralFat !== null && (() => {
               const visceral = lastMeasurement.visceralFat;
-              const status = getVisceralStatus(visceral);
+              const guidance = getGuidance("visceral", visceral, ctx);
+              const status = cardStatus(guidance, "Niveau de graisse viscérale");
               return (
                 <MetricCard
                   title="Graisse Viscérale"
                   value={visceral}
                   unit="nv"
                   icon={<AlertCircle size={20} />}
-                  category={status.cat}
+                  category={status.category}
                   label={status.label}
                   progress={(visceral / 20) * 100}
                   historyValues={visceralHistory}
-                  guidance={getGuidance("visceral", visceral, ctx)}
+                  guidance={guidance}
                 />
               );
             })()}
 
             {/* 9. Métabolisme de Base (BMR) */}
-            {lastMeasurement.bmr && (
-              <MetricCard
-                title="Métabolisme de Base (BMR)"
-                value={lastMeasurement.bmr}
-                unit="kcal"
-                icon={<Flame size={20} />}
-                category="warning"
-                label="Besoin métabolique quotidien"
-                progress={100}
-                historyValues={bmrHistory}
-                guidance={getGuidance("bmr", lastMeasurement.bmr, ctx)}
-              />
-            )}
+            {lastMeasurement.bmr && (() => {
+              const bmr = lastMeasurement.bmr;
+              const guidance = getGuidance("bmr", bmr, ctx);
+              // Le BMR n'a aucun seuil clinique : la guidance le rend neutre (indigo),
+              // là où la carte l'affichait en ambre « warning » sans raison.
+              const status = cardStatus(guidance, "Besoin métabolique quotidien");
+              return (
+                <MetricCard
+                  title="Métabolisme de Base (BMR)"
+                  value={bmr}
+                  unit="kcal"
+                  icon={<Flame size={20} />}
+                  category={status.category}
+                  label={status.label}
+                  progress={100}
+                  historyValues={bmrHistory}
+                  guidance={guidance}
+                />
+              );
+            })()}
           </div>
         ) : (
           <div className="glass-panel" style={{ textAlign: "center", padding: "40px" }}>

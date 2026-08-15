@@ -22,7 +22,8 @@ describe("calculateBia", () => {
     assert.ok(r.fatPct >= 3 && r.fatPct <= 50, `fatPct hors bornes: ${r.fatPct}`);
     assert.ok(r.musclePct >= 30 && r.musclePct <= 85, `musclePct hors bornes: ${r.musclePct}`);
     assert.ok(r.waterPct >= 35 && r.waterPct <= 75, `waterPct hors bornes: ${r.waterPct}`);
-    assert.ok(r.boneMassKg >= 1 && r.boneMassKg <= 8, `boneMassKg hors bornes: ${r.boneMassKg}`);
+    // Borne alignée sur le clamp réel d'estimateBoneMassKg ([1, 5] depuis be1f8ca).
+    assert.ok(r.boneMassKg >= 1 && r.boneMassKg <= 5, `boneMassKg hors bornes: ${r.boneMassKg}`);
     assert.ok(r.visceralFat >= 1 && r.visceralFat <= 30, `visceralFat hors bornes: ${r.visceralFat}`);
     assert.ok(Number.isInteger(r.bmr) && r.bmr > 0, `bmr invalide: ${r.bmr}`);
   });

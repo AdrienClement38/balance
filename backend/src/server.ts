@@ -30,13 +30,18 @@ const server = fastify({
 });
 
 // 1. Configuration CORS
+// En mode « 1 seul site » le backend sert lui-même le frontend : tout est en même
+// origine et AUCUNE origine tierce n'a besoin d'être autorisée. En production on
+// refuse donc le cross-origin par défaut plutôt que de l'ouvrir à tous ("*").
+// CORS_ORIGIN reste là pour le cas où le frontend est hébergé ailleurs.
+const corsOrigin = process.env.CORS_ORIGIN || (isProduction ? false : "*");
 if (isProduction && !process.env.CORS_ORIGIN) {
-  server.log.warn(
-    "CORS_ORIGIN n'est pas défini en production : l'API accepte actuellement toutes les origines (*). Définissez CORS_ORIGIN pour restreindre l'accès."
+  server.log.info(
+    "CORS_ORIGIN n'est pas défini : les requêtes cross-origin sont refusées (mode « 1 seul site »). Définissez CORS_ORIGIN si le frontend est servi depuis une autre origine."
   );
 }
 server.register(cors, {
-  origin: process.env.CORS_ORIGIN || "*",
+  origin: corsOrigin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 });

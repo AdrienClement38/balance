@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, integer, decimal, date, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, integer, decimal, date, primaryKey, index } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
@@ -30,40 +30,57 @@ export const householdMembers = pgTable(
   (t) => ({ pk: primaryKey({ columns: [t.householdId, t.userId] }) })
 );
 
-export const profiles = pgTable("profiles", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  name: varchar("name", { length: 100 }).notNull(),
-  gender: varchar("gender", { length: 10 }).notNull(), // 'male' | 'female'
-  birthdate: date("birthdate").notNull(),
-  heightCm: integer("height_cm").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// Index sur user_id : chaque requête authentifiée re-vérifie la possession du profil
+// (`WHERE profiles.user_id = <jwt.id>`), c'est le filtre le plus chaud du backend.
+export const profiles = pgTable(
+  "profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    gender: varchar("gender", { length: 10 }).notNull(), // 'male' | 'female'
+    birthdate: date("birthdate").notNull(),
+    heightCm: integer("height_cm").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ userIdx: index("profiles_user_id_idx").on(t.userId) })
+);
 
-export const measurements = pgTable("measurements", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
-  weightKg: decimal("weight_kg", { precision: 5, scale: 2 }).notNull(),
-  impedanceOhms: integer("impedance_ohms").notNull(),
-  fatPct: decimal("fat_pct", { precision: 4, scale: 2 }),
-  musclePct: decimal("muscle_pct", { precision: 4, scale: 2 }),
-  waterPct: decimal("water_pct", { precision: 4, scale: 2 }),
-  boneMassKg: decimal("bone_mass_kg", { precision: 4, scale: 2 }),
-  bmr: integer("bmr"),
-  visceralFat: integer("visceral_fat"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// Index (profile_id, created_at) : couvre la lecture de l'historique
+// `WHERE profile_id = ? ORDER BY created_at DESC LIMIT n` (un btree se parcourt
+// aussi bien à l'envers, pas besoin de déclarer DESC).
+export const measurements = pgTable(
+  "measurements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
+    weightKg: decimal("weight_kg", { precision: 5, scale: 2 }).notNull(),
+    impedanceOhms: integer("impedance_ohms").notNull(),
+    fatPct: decimal("fat_pct", { precision: 4, scale: 2 }),
+    musclePct: decimal("muscle_pct", { precision: 4, scale: 2 }),
+    waterPct: decimal("water_pct", { precision: 4, scale: 2 }),
+    boneMassKg: decimal("bone_mass_kg", { precision: 4, scale: 2 }),
+    bmr: integer("bmr"),
+    visceralFat: integer("visceral_fat"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ profileCreatedIdx: index("measurements_profile_id_created_at_idx").on(t.profileId, t.createdAt) })
+);
 
 // Journal des erreurs de pesée (échec d'enregistrement, impédance anormale, etc.)
-export const errorLogs = pgTable("error_logs", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
-  code: varchar("code", { length: 50 }).notNull(), // ex: 'low_impedance' | 'save_failed' | 'bluetooth'
-  message: varchar("message", { length: 500 }).notNull(),
-  weightKg: decimal("weight_kg", { precision: 5, scale: 2 }),
-  impedanceOhms: integer("impedance_ohms"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const errorLogs = pgTable(
+  "error_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    profileId: uuid("profile_id").references(() => profiles.id, { onDelete: "cascade" }).notNull(),
+    code: varchar("code", { length: 50 }).notNull(), // ex: 'low_impedance' | 'save_failed' | 'bluetooth'
+    message: varchar("message", { length: 500 }).notNull(),
+    weightKg: decimal("weight_kg", { precision: 5, scale: 2 }),
+    impedanceOhms: integer("impedance_ohms"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ profileCreatedIdx: index("error_logs_profile_id_created_at_idx").on(t.profileId, t.createdAt) })
+);
 
 // Relationships
 export const usersRelations = relations(users, ({ many }) => ({

@@ -1,0 +1,9 @@
+{
+  "$comment": "Garde-fou VERSIONNÉ du projet — voir CLAUDE.md. Le compte de ce poste est partagé : l'outil « navigateur externe » pilote un vrai Chrome/Firefox rattaché au compte et peut ouvrir un onglet sur le PC de quelqu'un d'autre. Tout test navigateur passe par le volet de prévisualisation intégré (Claude_Browser). NE PAS RETIRER ce deny.",
+  "permissions": {
+    "deny": [
+      "mcp__claude-in-chrome",
+      "mcp__Claude_in_Chrome"
+    ]
+  }
+}

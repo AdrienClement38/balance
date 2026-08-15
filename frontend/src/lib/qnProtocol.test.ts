@@ -101,9 +101,10 @@ describe("parseAcFrame (protocole FFB0 / FitTrack Dara, trames réelles capturé
   });
 
   it("décode un poids > 255 (débordement sur l'octet fort)", () => {
-    // ac 02 01 25 00 00 ce f4 -> raw 0x0125 = 293 -> 2.93 kg
+    // ac 02 01 25 00 00 ce f4 -> raw 0x0125 = 293 -> 29,3 kg (diviseur 10)
     const r = parseAcFrame(frame(0xac, 0x02, 0x01, 0x25, 0x00, 0x00, 0xce, 0xf4));
     expect(r!.raw).toBe(293);
+    expect(r!.weightKg).toBeCloseTo(29.3, 5);
     expect(r!.checksumOk).toBe(true);
   });
 

@@ -23,6 +23,19 @@ export const STATUS_COLORS: Record<MetricStatus, string> = {
   danger: "#f43f5e", // coral
 };
 
+export type MetricCategory = "primary" | "success" | "warning" | "danger" | "info";
+
+// Ce module est la SEULE source de vérité des seuils santé : le badge coloré de la
+// carte et le texte de guidance en dessous doivent toujours dire la même chose.
+// (Avant, la carte utilisait des seuils concurrents de bodyMetrics.ts et pouvait
+// afficher « Moyen » au-dessus d'un texte « Excellente valeur ».)
+export const STATUS_CATEGORY: Record<MetricStatus, MetricCategory> = {
+  good: "success",
+  ok: "primary",
+  warning: "warning",
+  danger: "danger",
+};
+
 export interface GuidanceContext {
   gender: "male" | "female";
   age: number;
