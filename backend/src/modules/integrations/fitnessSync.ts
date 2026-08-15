@@ -22,6 +22,7 @@
  * dans l'UI Balance sans avoir à ouvrir les logs du serveur.
  */
 import { createHmac } from "crypto";
+import { broadcastToUser } from "../../config/websocket.js";
 
 /** Journal minimal (compatible FastifyBaseLogger). */
 interface Logger {
@@ -219,17 +220,19 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
   if (!fitnessSyncConfigured() || catchupRunning) return 0;
   catchupRunning = true;
   try {
-    const [{ db }, { measurements, profiles, users }, { and, asc, eq, gt, isNull }] = await Promise.all([
+    const [{ db }, { measurements, profiles, users }, { and, asc, eq, gt, inArray, isNull, sql }] = await Promise.all([
       import("../../config/db.js"),
       import("../../db/schema.js"),
       import("drizzle-orm"),
     ]);
 
+    const emails = fitnessSyncEmails();
     const since = new Date(Date.now() - CATCHUP_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
     const rows = await db
       .select({
         id: measurements.id,
         profileId: measurements.profileId,
+        userId: profiles.userId,
         createdAt: measurements.createdAt,
         weightKg: measurements.weightKg,
         fatPct: measurements.fatPct,
@@ -243,13 +246,21 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
       .from(measurements)
       .innerJoin(profiles, eq(measurements.profileId, profiles.id))
       .innerJoin(users, eq(profiles.userId, users.id))
-      .where(and(isNull(measurements.fitnessSyncedAt), gt(measurements.createdAt, since)))
+      // Le filtre sur la liste blanche est fait EN SQL : sinon les pesées des comptes non
+      // concernés — éternellement « non envoyées », par définition — rempliraient la limite
+      // et affameraient celles qui attendent vraiment.
+      .where(
+        and(
+          isNull(measurements.fitnessSyncedAt),
+          eq(measurements.fitnessSyncSkipped, false), // hors périmètre : jamais rejouées
+          gt(measurements.createdAt, since),
+          inArray(sql`lower(${users.email})`, emails)
+        )
+      )
       .orderBy(asc(measurements.createdAt))
       .limit(CATCHUP_LIMIT);
 
-    // Les pesées des comptes non concernés sont marquées « envoyées » dès l'insertion : la file
-    // d'attente ne contient donc que des comptes éligibles. Le contrôle reste par sécurité, au
-    // cas où la liste blanche changerait entre l'insertion et le rattrapage.
+    // Second filet : la liste blanche a pu changer entre la requête et l'envoi.
     const pending = rows.filter((r: { email: string }) => shouldSync(r.email));
     if (pending.length === 0) return 0;
 
@@ -281,6 +292,7 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
       // des échecs identiques dans le journal.
       if (issue !== "ok") break;
       await markSynced(r.id, log);
+      broadcastToUser(r.userId, "measurement_synced", { id: r.id });
       sent++;
     }
     if (sent) log.info(`[fitness-sync] Rattrapage terminé : ${sent}/${pending.length} envoyée(s).`);
@@ -294,7 +306,13 @@ export async function flushPendingWeighIns(log: Logger): Promise<number> {
 }
 
 /** Pousse une pesée. À appeler sans `await` (effet de bord après réponse). */
-export function syncWeighIn(email: string, profileId: string, payload: WeighInPayload, log: Logger): void {
+export function syncWeighIn(
+  email: string,
+  userId: string,
+  profileId: string,
+  payload: WeighInPayload,
+  log: Logger
+): void {
   if (!shouldSync(email)) return;
   void (async () => {
     const issue = await sendBestEffort(
@@ -306,6 +324,9 @@ export function syncWeighIn(email: string, profileId: string, payload: WeighInPa
     // Cas « compte-introuvable » compris : la configuration corrigée, elle remontera d'elle-même.
     if (issue !== "ok") return;
     await markSynced(payload.measurementId, log);
+    // L'envoi se fait APRÈS la réponse HTTP : sans cet événement, l'app resterait sur un
+    // « pas encore envoyé » jusqu'au prochain rechargement.
+    broadcastToUser(userId, "measurement_synced", { id: payload.measurementId });
     // L'app fitness répond : c'est le meilleur moment pour vider l'éventuel retard accumulé.
     await flushPendingWeighIns(log);
   })();

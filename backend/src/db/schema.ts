@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, integer, decimal, date, primaryKey, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, integer, decimal, date, primaryKey, index, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
@@ -63,10 +63,15 @@ export const measurements = pgTable(
     bmr: integer("bmr"),
     visceralFat: integer("visceral_fat"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    // Envoi vers l'app fitness : NULL = pas encore parti. Sert au RATTRAPAGE — sans cette
-    // trace, une pesée perdue pendant une indisponibilité (typiquement un réveil à froid
-    // d'AlwaysData) ne serait jamais renvoyée, et l'oubli serait silencieux.
+    // Envoi vers l'app fitness : horodatage de la transmission RÉELLE, NULL sinon. Sert au
+    // RATTRAPAGE — sans cette trace, une pesée perdue pendant une indisponibilité (typiquement
+    // un réveil à froid d'AlwaysData) ne serait jamais renvoyée, et l'oubli serait silencieux.
+    // C'est aussi ce qui fait foi dans l'UI : « Envoyée vers AC-KINETIK ».
     fitnessSyncedAt: timestamp("fitness_synced_at", { withTimezone: true }),
+    // Hors périmètre : pesée antérieure à l'intégration, à ne jamais envoyer NI présenter
+    // comme envoyée. Sans ce drapeau distinct, sortir l'historique de la file d'attente
+    // obligeait à le marquer « synchronisé » — un mensonge, dès lors que l'UI l'affiche.
+    fitnessSyncSkipped: boolean("fitness_sync_skipped").default(false).notNull(),
   },
   (t) => ({ profileCreatedIdx: index("measurements_profile_id_created_at_idx").on(t.profileId, t.createdAt) })
 );

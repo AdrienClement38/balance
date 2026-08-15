@@ -11,10 +11,12 @@ import { Measurement } from "../services/api.ts";
 export function useRealtimeMeasurements(
   enabled: boolean,
   activeProfileId: string | null,
-  onMeasurement: (m: Measurement) => void
+  onMeasurement: (m: Measurement) => void,
+  onSynced?: (measurementId: string) => void
 ) {
   const profileIdRef = useRef(activeProfileId);
   const callbackRef = useRef(onMeasurement);
+  const syncedRef = useRef(onSynced);
 
   useEffect(() => {
     profileIdRef.current = activeProfileId;
@@ -23,6 +25,10 @@ export function useRealtimeMeasurements(
   useEffect(() => {
     callbackRef.current = onMeasurement;
   }, [onMeasurement]);
+
+  useEffect(() => {
+    syncedRef.current = onSynced;
+  }, [onSynced]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -53,6 +59,11 @@ export function useRealtimeMeasurements(
             if (measurement.profileId === profileIdRef.current) {
               callbackRef.current(measurement);
             }
+          } else if (parsed.type === "measurement_synced" && parsed.data?.id) {
+            // La pesée vient d'atteindre l'app fitness. L'envoi a lieu APRÈS la réponse
+            // HTTP : sans cet événement, l'app afficherait « en attente » jusqu'au
+            // prochain rechargement, alors que c'est déjà parti.
+            syncedRef.current?.(parsed.data.id as string);
           }
         } catch (err) {
           console.error("Erreur décodage message WebSocket :", err);

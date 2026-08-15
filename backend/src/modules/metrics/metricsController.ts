@@ -5,7 +5,7 @@ import { measurements, profiles } from "../../db/schema.js";
 import { and, desc, eq } from "drizzle-orm";
 import { calculateBia } from "../bia/biaCalculator.js";
 import { broadcastToUser } from "../../config/websocket.js";
-import { shouldSync, syncDeletion, syncWeighIn } from "../integrations/fitnessSync.js";
+import { syncDeletion, syncWeighIn } from "../integrations/fitnessSync.js";
 
 // Input validation
 export const createMeasurementSchema = z.object({
@@ -70,10 +70,6 @@ export async function createMeasurementHandler(
         boneMassKg: bia.boneMassKg.toString(),
         bmr: bia.bmr,
         visceralFat: bia.visceralFat,
-        // `fitness_synced_at IS NULL` = « reste à envoyer à l'app fitness ». Les comptes non
-        // concernés sont donc marqués tout de suite : la file de rattrapage ne contient que
-        // des pesées réellement en attente, au lieu de se remplir de lignes jamais envoyables.
-        fitnessSyncedAt: shouldSync(email) ? null : new Date(),
       })
       .returning();
 
@@ -85,6 +81,7 @@ export async function createMeasurementHandler(
     //    faire échouer la pesée. Les échecs sont tracés dans le journal d'erreurs du profil.
     syncWeighIn(
       email,
+      userId,
       profileId,
       {
         measurementId: newMeasurement.id,

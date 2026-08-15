@@ -1,6 +1,6 @@
 import { useState } from "react";
 import api, { Measurement } from "../services/api.ts";
-import { History, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { History, ChevronDown, ChevronRight, Trash2, Check, Clock } from "lucide-react";
 
 interface MeasurementHistoryProps {
   history: Measurement[];
@@ -12,6 +12,11 @@ export function MeasurementHistory({ history, onDeleted }: MeasurementHistoryPro
   const [deleting, setDeleting] = useState<string | null>(null);
 
   if (history.length === 0) return null;
+
+  // L'envoi vers l'app fitness n'est actif que pour les comptes configurés. Plutôt qu'un
+  // drapeau à faire redescendre du serveur, on le déduit des données : si aucune pesée n'a
+  // jamais été transmise, l'intégration ne concerne pas ce compte et rien ne s'affiche.
+  const syncActif = history.some((m) => m.fitnessSyncedAt);
 
   const remove = async (id: string) => {
     if (!window.confirm("Supprimer définitivement cette pesée ?")) return;
@@ -65,6 +70,26 @@ export function MeasurementHistory({ history, onDeleted }: MeasurementHistoryPro
                   {new Date(m.createdAt).toLocaleString("fr-FR")}
                   {m.impedanceOhms > 0 ? ` · ${m.impedanceOhms} Ω` : " · sans impédance"}
                 </div>
+                {syncActif && !m.fitnessSyncSkipped && (
+                  <div
+                    style={{
+                      marginTop: "4px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      fontSize: "0.7rem",
+                      color: m.fitnessSyncedAt ? "var(--success)" : "var(--text-muted)",
+                    }}
+                    title={
+                      m.fitnessSyncedAt
+                        ? `Transmise à AC-KINETIK le ${new Date(m.fitnessSyncedAt).toLocaleString("fr-FR")}`
+                        : "Pas encore transmise à AC-KINETIK — un nouvel essai aura lieu à la prochaine pesée."
+                    }
+                  >
+                    {m.fitnessSyncedAt ? <Check size={12} /> : <Clock size={12} />}
+                    {m.fitnessSyncedAt ? "Envoyée vers AC-KINETIK" : "En attente d'envoi"}
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => remove(m.id)}

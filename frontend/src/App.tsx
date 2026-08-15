@@ -61,7 +61,20 @@ export function App() {
     setHistory((prev) => (prev.some((x) => x.id === m.id) ? prev : [m, ...prev]));
   }, []);
 
-  useRealtimeMeasurements(isAuthenticated, activeProfile?.id ?? null, handleRealtimeMeasurement);
+  // La pesée vient d'être transmise à l'app fitness : on met à jour la ligne concernée
+  // pour que son badge passe de « envoi… » à « envoyée », sans recharger.
+  const handleMeasurementSynced = useCallback((id: string) => {
+    setHistory((prev) =>
+      prev.map((m) => (m.id === id && !m.fitnessSyncedAt ? { ...m, fitnessSyncedAt: new Date().toISOString() } : m))
+    );
+  }, []);
+
+  useRealtimeMeasurements(
+    isAuthenticated,
+    activeProfile?.id ?? null,
+    handleRealtimeMeasurement,
+    handleMeasurementSynced
+  );
 
   const handleAuthSuccess = () => {
     setIsAuthenticated(true);

@@ -43,6 +43,13 @@
       "when": 1786793584248,
       "tag": "0005_dashing_sabra",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786798818659,
+      "tag": "0006_powerful_guardsmen",
+      "breakpoints": true
     }
   ]
 }

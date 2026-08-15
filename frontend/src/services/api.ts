@@ -29,6 +29,12 @@ export interface Measurement {
   bmr: number | null;
   visceralFat: number | null;
   createdAt: string;
+  // Envoi vers l'app fitness : horodatage de la transmission réelle, null sinon. Toujours
+  // null si l'intégration n'est pas active pour ce compte — c'est ce qui fait que le badge
+  // ne s'affiche que chez les personnes concernées, sans drapeau supplémentaire.
+  fitnessSyncedAt: string | null;
+  // Pesée antérieure à l'intégration : ni envoyée, ni à envoyer. Aucun badge.
+  fitnessSyncSkipped: boolean;
 }
 
 export interface ErrorLog {
