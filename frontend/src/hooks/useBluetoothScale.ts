@@ -524,38 +524,49 @@ export function useBluetoothScale() {
       writeUnitRef.current = layout.writeUnit;
       writeTimeRef.current = layout.writeTime;
 
-      // ⚠️ Le listener est posé AVANT `startNotifications()`, et c'est capital.
-      // Posé après, un abonnement qui aboutit tardivement (Android peut mettre plus de
-      // 5 s) est bel et bien actif côté pile, mais l'app n'écoute pas encore : les trames
-      // arrivent et sont jetées. On croyait la balance muette alors qu'elle parlait.
-      // Poser le listener d'abord ne coûte rien : sans abonnement, il ne se déclenche pas.
+      // Descripteurs journalisés : `startNotifications()` doit écrire le CCCD (0x2902).
+      // Son absence expliquerait un abonnement impossible — sa présence l'écarte.
       for (const c of layout.notify) {
-        c.addEventListener("characteristicvaluechanged", (event: any) => {
-          const v = event.target?.value as DataView | undefined;
-          if (v) handleFrame(v);
-        });
-      }
-
-      // Descripteurs journalisés AVANT toute tentative : `startNotifications()` doit écrire
-      // le descripteur CCCD (0x2902). Son ABSENCE, ou un accès qui exige un lien chiffré,
-      // est la cause connue d'un abonnement qui n'aboutit jamais sur Android alors qu'il
-      // passe sur Windows. Sans cette ligne dans le journal, on ne peut que supposer.
-      for (const c of layout.notify) {
-        const ds: any[] = await c.getDescriptors?.().catch(() => []) ?? [];
+        const ds: any[] = (await c.getDescriptors?.().catch(() => [])) ?? [];
         logNote(
-          `  descripteurs de ${shortUuid(c.uuid)} : ${ds.map((d) => shortUuid(d.uuid)).join(", ") || "(AUCUN — notifications impossibles à activer)"}`
+          `  descripteurs de ${shortUuid(c.uuid)} : ${ds.map((d) => shortUuid(d.uuid)).join(", ") || "(AUCUN)"}`
         );
       }
 
+      // On raisonne sur les UUID, pas sur les objets : après une reconnexion, TOUS les objets
+      // de caractéristique sont invalidés par la spec (« Characteristic is no longer valid.
+      // Remember to retrieve the characteristic again after reconnecting »). Réutiliser
+      // l'ancien objet fait échouer l'essai suivant avant même de commencer — la seconde
+      // caractéristique n'était donc jamais réellement testée.
+      const cibles: string[] = layout.notify.map((c: any) => c.uuid);
+      const ecoutes = new WeakSet<any>();
+      let courant: ScaleLayout = layout;
       let abonnees = 0;
       let fileBloquee = false;
-      for (let i = 0; i < layout.notify.length; i++) {
-        const c = layout.notify[i];
+
+      for (let i = 0; i < cibles.length; i++) {
+        const uuid = cibles[i];
+        const c = courant.notify.find((x: any) => x.uuid === uuid);
+        if (!c) {
+          logNote(`Caractéristique ${shortUuid(uuid)} introuvable après reconnexion — ignorée.`);
+          continue;
+        }
+
+        // Le listener est posé AVANT l'abonnement, et sur l'objet COURANT. Posé après, un
+        // abonnement qui aboutit tardivement est actif côté pile mais l'app n'écoute pas
+        // encore : les trames arrivent et sont jetées.
+        if (!ecoutes.has(c)) {
+          ecoutes.add(c);
+          c.addEventListener("characteristicvaluechanged", (event: any) => {
+            const v = event.target?.value as DataView | undefined;
+            if (v) handleFrame(v);
+          });
+        }
+
         let minuteur: number | undefined;
         try {
-          // Un `Promise.race` abandonne l'ATTENTE, jamais l'opération GATT elle-même :
-          // l'écriture du descripteur reste en tête de file côté Android. Le minuteur est
-          // donc un simple garde-fou d'interface, pas une annulation.
+          // Un `Promise.race` abandonne l'ATTENTE, jamais l'opération GATT : l'écriture du
+          // descripteur reste en tête de file. Le minuteur est un garde-fou d'interface.
           await Promise.race([
             c.startNotifications(),
             new Promise((_, rej) => {
@@ -566,25 +577,27 @@ export function useBluetoothScale() {
           fileBloquee = false;
           logNote(`Notifications actives sur ${shortUuid(c.uuid)}.`);
         } catch (e: any) {
-          const lien = server?.connected ? "lien encore actif" : "LIEN DÉJÀ COUPÉ";
+          const lien = gattServerRef.current?.connected ? "lien encore actif" : "LIEN DÉJÀ COUPÉ";
           logNote(
-            `Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e} [${lien}]`
+            `Notifications REFUSÉES sur ${shortUuid(uuid)} : ${e?.name || "Error"} — ${e?.message || e} [${lien}]`
           );
-          if (/délai dépassé/.test(e?.message || "")) {
-            fileBloquee = true;
-            // L'opération est toujours en file : la caractéristique suivante attendrait
-            // derrière elle et échouerait identiquement. La SEULE façon de lui laisser sa
-            // chance est de repartir d'un lien neuf — se contenter d'abandonner (ce que je
-            // faisais) ne testait jamais la seconde.
-            if (i < layout.notify.length - 1) {
-              try {
-                if (server?.connected) server.disconnect();
-                logNote("File GATT bloquée → reconnexion avant d'essayer la suivante.");
-                await deviceRef.current.gatt.connect();
-              } catch (re: any) {
-                logNote(`Reconnexion impossible : ${re?.message || re}`);
-                break;
-              }
+          if (/délai dépassé/.test(e?.message || "")) fileBloquee = true;
+
+          // Repartir d'un lien NEUF puis TOUT redécouvrir : c'est la seule façon de donner
+          // sa chance à la caractéristique suivante (la file GATT reste bloquée par
+          // l'opération abandonnée, et les objets deviennent invalides après reconnexion).
+          if (i < cibles.length - 1) {
+            try {
+              if (gattServerRef.current?.connected) gattServerRef.current.disconnect();
+              logNote("Reconnexion et redécouverte avant d'essayer la suivante…");
+              const s2 = await deviceRef.current.gatt.connect();
+              gattServerRef.current = s2;
+              const l2 = await resolveScaleLayout(s2, logNote);
+              if (!l2 || l2.notify.length === 0) break;
+              courant = l2;
+            } catch (re: any) {
+              logNote(`Reconnexion impossible : ${re?.message || re}`);
+              break;
             }
           }
         } finally {
@@ -595,29 +608,20 @@ export function useBluetoothScale() {
       }
 
       if (abonnees === 0) {
-        // La pile GATT est laissée dans un état inutilisable : on coupe explicitement pour
-        // que la tentative suivante reparte d'un lien neuf.
         try {
-          if (server?.connected) server.disconnect();
+          if (gattServerRef.current?.connected) gattServerRef.current.disconnect();
         } catch {
           /* déjà fermé */
         }
-        // ⚠️ On OUBLIE l'appareil mémorisé. La connexion vient peut-être d'une permission
-        // persistante rendue par `getDevices()` : Chrome répond alors depuis son cache
-        // (découverte des services en quelques millisecondes, au lieu du délai d'une vraie
-        // interrogation BLE), et si cette permission a vieilli — typiquement après une mise
-        // à jour du navigateur — le lien ne sait plus écrire le descripteur, sans jamais le
-        // dire. Repartir du sélecteur redonne une autorisation FRAÎCHE. Sans cet oubli, on
-        // réessaie indéfiniment le même appareil périmé.
         deviceRef.current = null;
         listenerDeviceRef.current = null;
         throw new Error(
           fileBloquee
-            ? "La balance accepte la connexion mais ne confirme jamais l'activation de ses notifications. J'ai oublié l'appareil mémorisé : relancez une pesée et RE-SÉLECTIONNEZ la balance dans la liste — une autorisation Bluetooth vieillie (mise à jour du navigateur) donne exactement ce blocage. Si ça persiste, envoyez-moi le Diagnostic."
+            ? "La balance accepte la connexion et expose bien ses caractéristiques, mais n'active jamais ses notifications. Montez sur la balance AVANT de lancer la pesée et gardez-y les pieds : sur certains modèles, elle n'autorise l'abonnement que pendant une mesure active. Si ça persiste, envoyez-moi le Diagnostic."
             : "La balance s'est déconnectée avant d'avoir pu envoyer ses mesures : elle se rendort en quelques secondes. Remontez dessus pour la réveiller, puis relancez la pesée sans attendre."
         );
       }
-      logNote(`Notifications activées (${abonnees}/${layout.notify.length}). En attente de pesée…`);
+      logNote(`Notifications activées (${abonnees}/${cibles.length}). En attente de pesée…`);
     } catch (err: any) {
       const name = err?.name || "Error";
       const message = err?.message || String(err);
