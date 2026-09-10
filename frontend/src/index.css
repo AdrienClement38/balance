@@ -54,6 +54,18 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* La transition de thème était posée sur `*`, donc sur CHAQUE élément de la page —
+   des centaines de transitions surveillées en permanence, et une animation déclenchée
+   partout au moindre changement de couleur. Coûteux, surtout sur mobile. Elle n'existe
+   que pour le basculement clair/sombre : on la limite aux surfaces qui changent
+   réellement de couleur, ce qui suffit visuellement. */
+body,
+.glass-panel,
+.metric-card,
+.btn,
+.input-field {
   transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
@@ -107,6 +119,19 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: var(--radius-md);
   padding: 24px;
   box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* Le flou d'arrière-plan est l'effet le plus coûteux de la page : le navigateur doit
+   recomposer ce qu'il y a DERRIÈRE chaque panneau, à chaque défilement. Une quinzaine de
+   panneaux empilés, c'est tenable sur un ordinateur, beaucoup moins sur un téléphone —
+   d'où le défilement saccadé. Sur petit écran, le fond translucide seul rend presque
+   pareil pour une fraction du coût. */
+@media (max-width: 640px) {
+  .glass-panel,
+  .metric-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .glass-panel:hover {

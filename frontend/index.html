@@ -16,7 +16,20 @@
     <!-- Google Fonts: Outfit pour un rendu premium moderne -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chargée SANS bloquer le rendu. Un <link rel="stylesheet"> classique retarde le
+         premier affichage ET l'exécution du script de l'app, le temps d'un aller-retour
+         vers une origine tierce — coûteux sur réseau mobile. L'astuce media="print" laisse
+         le navigateur télécharger en arrière-plan, puis applique la feuille une fois prête.
+         Entre-temps la pile de repli système de --font-sans s'affiche (index.css). -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+    >
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    </noscript>
     
     <title>Balance Connectée - Suivi Santé</title>
   </head>

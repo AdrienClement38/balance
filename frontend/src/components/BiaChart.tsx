@@ -159,10 +159,10 @@ export function BiaChart({ history }: BiaChartProps) {
       </div>
 
       {/* SVG Canvas */}
-      <div style={{ position: "relative", width: "100%", overflow: "hidden", touchAction: "none" }}>
+      <div style={{ position: "relative", width: "100%", overflow: "hidden", touchAction: "pan-y" }}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          style={{ width: "100%", height: "auto", display: "block", touchAction: "none" }}
+          style={{ width: "100%", height: "auto", display: "block", touchAction: "pan-y" }}
           {...scrubHandlers(points.map((p) => p.x), width, setActiveIdx)}
         >
           <defs>

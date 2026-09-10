@@ -70,7 +70,11 @@ export async function getErrorsHandler(
 ) {
   try {
     const userId = (request.user as { id: string }).id;
-    const limit = parseInt(request.query.limit || "50", 10);
+    // Borné et validé : `?limit=abc` donnait NaN et `?limit=0` une valeur fausse, deux cas
+    // où Drizzle retire purement et simplement la clause LIMIT — la table entière partait
+    // alors dans la réponse. Le plafond protège aussi la mémoire du serveur.
+    const limitBrut = Number.parseInt(request.query.limit || "50", 10);
+    const limit = Number.isFinite(limitBrut) ? Math.min(Math.max(limitBrut, 1), 500) : 50;
 
     // Erreurs de tous les profils de l'utilisateur (scope via profiles.userId).
     const rows = await db

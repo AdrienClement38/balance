@@ -28,6 +28,11 @@ const server = fastify({
   logger: {
     level: isProduction ? "info" : "debug",
   },
+  // Derrière le proxy d'AlwaysData, `request.ip` valait l'adresse DU PROXY, identique pour
+  // tout le monde : le rate-limit ne comptait donc qu'UN SEUL compteur partagé par tous les
+  // visiteurs. Une personne un peu active pouvait bloquer les connexions de tout le site.
+  // Avec trustProxy, Fastify lit X-Forwarded-For et retrouve la vraie IP cliente.
+  trustProxy: true,
 });
 
 // 1. Configuration CORS

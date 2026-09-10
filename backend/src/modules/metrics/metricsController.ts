@@ -162,7 +162,11 @@ export async function getMeasurementsHandler(
   try {
     const userId = (request.user as { id: string }).id;
     const profileId = request.params.profileId;
-    const limit = parseInt(request.query.limit || "50", 10);
+    // Borné et validé : `?limit=abc` donnait NaN et `?limit=0` une valeur fausse, deux cas
+    // où Drizzle retire purement et simplement la clause LIMIT — la table entière partait
+    // alors dans la réponse. Le plafond protège aussi la mémoire du serveur.
+    const limitBrut = Number.parseInt(request.query.limit || "50", 10);
+    const limit = Number.isFinite(limitBrut) ? Math.min(Math.max(limitBrut, 1), 500) : 50;
 
     // 1. Vérifier si le profil appartient à l'utilisateur
     const [profile] = await db

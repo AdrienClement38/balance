@@ -27,9 +27,25 @@ if (useProductionDb) {
   pool = new pg.Pool({
     connectionString,
     max: 3, // Limitation AlwaysData
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    // 30 s était trop court : le pool se vidait entre deux visites, et la requête suivante
+    // repayait une ouverture de connexion complète (DNS + TLS + authentification) — la
+    // fameuse « première page très lente ». 5 min gardent le lien chaud sans monopoliser
+    // le quota de connexions de l'hébergement.
+    idleTimeoutMillis: 5 * 60 * 1000,
+    // 2 s ne suffisent pas à ouvrir une connexion TLS vers un Postgres distant réveillé
+    // à froid : la première requête après une inactivité partait en 500 alors que la base
+    // allait parfaitement bien.
+    connectionTimeoutMillis: 10000,
   });
+
+  // ⚠️ Sans cet écouteur, une connexion INACTIVE coupée par le serveur (redémarrage
+  // Postgres, coupure réseau, expiration côté hébergeur) émet une erreur qui n'appartient
+  // à aucune requête. Node traite alors un 'error' sans écouteur comme une exception non
+  // interceptée et TUE le process : le site tombe sans que personne n'ait rien fait.
+  pool.on("error", (err) => {
+    console.error("[db] Connexion inactive perdue (le pool en rouvrira une) :", err.message);
+  });
+
   db = pgDrizzle(pool, { schema });
 } else {
   // En local, on utilise PGlite persistant dans le dossier ./db_data à la racine du projet

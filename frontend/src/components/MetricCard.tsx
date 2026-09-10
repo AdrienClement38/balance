@@ -63,10 +63,10 @@ function Sparkline({ values, color, gradId, unit }: SparklineProps) {
   const areaPath = `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`;
 
   return (
-    <div style={{ width: "100%", height: "40px", marginTop: "12px", marginBottom: "8px", touchAction: "none" }}>
+    <div style={{ width: "100%", height: "40px", marginTop: "12px", marginBottom: "8px", touchAction: "pan-y" }}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        style={{ width: "100%", height: "100%", overflow: "visible", touchAction: "none" }}
+        style={{ width: "100%", height: "100%", overflow: "visible", touchAction: "pan-y" }}
         {...scrubHandlers(points.map((p) => p.x), width, setActiveIdx)}
       >
         <defs>

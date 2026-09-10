@@ -135,10 +135,14 @@ async function resolveScaleLayout(
   const notifiables: any[] = [];
   let write: any = null;
   for (const svc of services) {
-    for (const c of parService.get(svc) || []) {
-      if (c.properties?.notify || c.properties?.indicate) notifiables.push(c);
-      if (!write && (c.properties?.write || c.properties?.writeWithoutResponse)) write = c;
-    }
+    const chars = parService.get(svc) || [];
+    const n = chars.filter((c) => c.properties?.notify || c.properties?.indicate);
+    if (!n.length) continue;
+    notifiables.push(...n);
+    // L'écriture est prise DANS LE MÊME service que les notifications, jamais « la
+    // première rencontrée tous services confondus » : écrire dans un service étranger
+    // (batterie, informations appareil…) ne réveille rien et peut être refusé.
+    if (!write) write = chars.find((c) => c.properties?.write || c.properties?.writeWithoutResponse) || null;
   }
   if (notifiables.length) {
     logNote(
@@ -513,42 +517,65 @@ export function useBluetoothScale() {
       writeUnitRef.current = layout.writeUnit;
       writeTimeRef.current = layout.writeTime;
 
-      // On s'abonne à CHAQUE caractéristique notifiable, une par une, et l'échec de l'une
-      // n'empêche pas les autres. Auparavant un seul `startNotifications()` non tenu
-      // interrompait toute la connexion : le journal s'arrêtait net après la découverte,
-      // sans jamais dire pourquoi (symptôme observé sur Android, alors que Windows passait).
-      let abonnees = 0;
+      // ⚠️ Le listener est posé AVANT `startNotifications()`, et c'est capital.
+      // Posé après, un abonnement qui aboutit tardivement (Android peut mettre plus de
+      // 5 s) est bel et bien actif côté pile, mais l'app n'écoute pas encore : les trames
+      // arrivent et sont jetées. On croyait la balance muette alors qu'elle parlait.
+      // Poser le listener d'abord ne coûte rien : sans abonnement, il ne se déclenche pas.
       for (const c of layout.notify) {
+        c.addEventListener("characteristicvaluechanged", (event: any) => {
+          const v = event.target?.value as DataView | undefined;
+          if (v) handleFrame(v);
+        });
+      }
+
+      let abonnees = 0;
+      let fileBloquee = false;
+      for (const c of layout.notify) {
+        let minuteur: number | undefined;
         try {
-          // Course contre une horloge : sur certaines piles BLE, `startNotifications()` ne
-          // se résout JAMAIS. Sans ce garde-fou, la pesée reste figée sans message.
-          // 5 s et non 8 : la balance ne reste éveillée que quelques secondes, et deux
-          // caractéristiques à 8 s consommaient 16 s à elles seules.
+          // Un `Promise.race` abandonne l'ATTENTE, jamais l'opération GATT elle-même :
+          // l'écriture du descripteur reste en tête de file côté Android. Le minuteur est
+          // donc un simple garde-fou d'interface, pas une annulation.
           await Promise.race([
             c.startNotifications(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (5 s)")), 5000)),
+            new Promise((_, rej) => {
+              minuteur = window.setTimeout(() => rej(new Error("délai dépassé (6 s)")), 6000);
+            }),
           ]);
-          c.addEventListener("characteristicvaluechanged", (event: any) => {
-            const v = event.target?.value as DataView | undefined;
-            if (v) handleFrame(v);
-          });
           abonnees++;
           logNote(`Notifications actives sur ${shortUuid(c.uuid)}.`);
         } catch (e: any) {
-          // L'état du lien AU MOMENT de l'échec tranche entre les deux causes possibles :
-          // lien tombé (la balance s'est rendormie) ou lien vivant mais abonnement refusé
-          // (pile Android qui n'aboutit pas). Sans cette information, impossible de choisir.
           const lien = server?.connected ? "lien encore actif" : "LIEN DÉJÀ COUPÉ";
           logNote(
             `Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e} [${lien}]`
           );
+          // Un délai dépassé signifie que l'opération est TOUJOURS en file. Enchaîner sur
+          // la caractéristique suivante la condamne d'avance — elle attendra derrière — et
+          // double l'attente subie. On s'arrête net.
+          if (/délai dépassé/.test(e?.message || "")) {
+            fileBloquee = true;
+            break;
+          }
+        } finally {
+          // Sans ça, le minuteur d'un abonnement RÉUSSI continue de courir et rejette dans
+          // le vide quelques secondes plus tard.
+          if (minuteur !== undefined) clearTimeout(minuteur);
         }
       }
 
       if (abonnees === 0) {
+        // La pile GATT est laissée dans un état inutilisable : on coupe explicitement pour
+        // que la tentative suivante reparte d'un lien neuf, au lieu d'hériter de la file
+        // bloquée et d'échouer identiquement.
+        try {
+          if (server?.connected) server.disconnect();
+        } catch {
+          /* déjà fermé */
+        }
         throw new Error(
-          server?.connected
-            ? "La balance est connectée mais n'accepte pas d'envoyer ses mesures (Android bloque l'abonnement). Retirez « FitTrack » des appareils Bluetooth appairés du téléphone, fermez l'app FitTrack, puis réessayez."
+          fileBloquee
+            ? "La balance a accepté la connexion mais n'a jamais confirmé l'envoi de ses mesures — c'est le comportement typique d'Android quand la balance est déjà appairée au téléphone. Retirez « FitTrack » des appareils Bluetooth du téléphone, fermez l'app FitTrack, remontez sur la balance, puis relancez."
             : "La balance s'est déconnectée avant d'avoir pu envoyer ses mesures : elle se rendort en quelques secondes. Remontez dessus pour la réveiller, puis relancez la pesée sans attendre."
         );
       }
