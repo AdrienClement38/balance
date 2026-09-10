@@ -466,7 +466,13 @@ export function useBluetoothScale() {
               d.name?.toLowerCase().includes("track") ||
               d.name?.toLowerCase().includes("dara")
           ) || null;
-        if (device) console.log("[balance] balance déjà autorisée :", device.name);
+        if (device) {
+          console.log("[balance] balance déjà autorisée :", device.name);
+          // Tracé dans le DIAGNOSTIC, pas seulement dans la console : c'est ce qui
+          // distingue une autorisation persistante (potentiellement périmée) d'une
+          // sélection fraîche, et donc explique une découverte anormalement rapide.
+          logNote(`Appareil repris d'une autorisation persistante : ${device.name || "sans nom"}.`);
+        }
       }
 
       // 3. Sinon, ouvrir le sélecteur (geste utilisateur requis, une seule fois).
@@ -475,6 +481,7 @@ export function useBluetoothScale() {
           acceptAllDevices: true,
           optionalServices: SCALE_SERVICES,
         });
+        logNote(`Appareil choisi dans le sélecteur : ${device.name || "sans nom"}.`);
       }
 
       deviceRef.current = device; // mémoriser pour les prochaines pesées
@@ -595,9 +602,18 @@ export function useBluetoothScale() {
         } catch {
           /* déjà fermé */
         }
+        // ⚠️ On OUBLIE l'appareil mémorisé. La connexion vient peut-être d'une permission
+        // persistante rendue par `getDevices()` : Chrome répond alors depuis son cache
+        // (découverte des services en quelques millisecondes, au lieu du délai d'une vraie
+        // interrogation BLE), et si cette permission a vieilli — typiquement après une mise
+        // à jour du navigateur — le lien ne sait plus écrire le descripteur, sans jamais le
+        // dire. Repartir du sélecteur redonne une autorisation FRAÎCHE. Sans cet oubli, on
+        // réessaie indéfiniment le même appareil périmé.
+        deviceRef.current = null;
+        listenerDeviceRef.current = null;
         throw new Error(
           fileBloquee
-            ? "La balance accepte la connexion mais ne confirme jamais l'activation de ses notifications. Ce blocage vient d'Android, pas de la balance : essayez de l'APPAIRER dans les réglages Bluetooth du téléphone (certaines balances exigent un lien chiffré), puis relancez. Ouvrez le Diagnostic et envoyez-le-moi si ça persiste."
+            ? "La balance accepte la connexion mais ne confirme jamais l'activation de ses notifications. J'ai oublié l'appareil mémorisé : relancez une pesée et RE-SÉLECTIONNEZ la balance dans la liste — une autorisation Bluetooth vieillie (mise à jour du navigateur) donne exactement ce blocage. Si ça persiste, envoyez-moi le Diagnostic."
             : "La balance s'est déconnectée avant d'avoir pu envoyer ses mesures : elle se rendort en quelques secondes. Remontez dessus pour la réveiller, puis relancez la pesée sans attendre."
         );
       }
