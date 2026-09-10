@@ -80,8 +80,17 @@ async function resolveScaleLayout(
 ): Promise<ScaleLayout | null> {
   const services: any[] = await server.getPrimaryServices().catch(() => []);
   logNote(`Services : ${services.map((s) => shortUuid(s.uuid)).join(", ") || "(aucun candidat visible)"}`);
+
+  // UNE SEULE découverte par service, réutilisée partout ensuite.
+  // Rappeler getCharacteristics() sur un même service peut rendre de NOUVEAUX objets côté
+  // Android ; s'abonner sur un objet qui n'est plus celui que la pile BLE a en cache est un
+  // moyen connu de rester indéfiniment en suspens — exactement le symptôme observé. Ça
+  // économise aussi des allers-retours GATT, précieux tant que la balance ne reste éveillée
+  // que quelques secondes.
+  const parService = new Map<any, any[]>();
   for (const svc of services) {
     const chars: any[] = await svc.getCharacteristics().catch(() => []);
+    parService.set(svc, chars);
     // Les PROPRIÉTÉS sont journalisées, pas seulement les UUID : sans elles, un log de
     // terrain ne dit pas si la caractéristique choisie savait seulement notifier.
     const decrire = (c: any) => {
@@ -92,16 +101,20 @@ async function resolveScaleLayout(
     logNote(`  ${shortUuid(svc.uuid)} → ${chars.map(decrire).join(", ") || "(aucune)"}`);
   }
 
+  /** Retrouve une caractéristique DANS la liste déjà découverte (jamais un nouvel appel GATT). */
+  const trouver = (svc: any, code: number) =>
+    (parService.get(svc) || []).find((c) => shortUuid(c.uuid) === `0x${code.toString(16)}`) || null;
+
   // Type 1 : FFE0/FFE1, écritures séparées FFE3 (unité) et FFE4 (temps).
   const s1 = services.find((s) => shortUuid(s.uuid) === "0xffe0");
   if (s1) {
-    const notify = await s1.getCharacteristic(QN_NOTIFY).catch(() => null);
+    const notify = trouver(s1, QN_NOTIFY);
     if (notify) {
       logNote("Disposition QN Type 1 (FFE0) détectée.");
       return {
         notify: [notify],
-        writeUnit: await s1.getCharacteristic(QN_WRITE_UNIT).catch(() => null),
-        writeTime: await s1.getCharacteristic(QN_WRITE_TIME).catch(() => null),
+        writeUnit: trouver(s1, QN_WRITE_UNIT),
+        writeTime: trouver(s1, QN_WRITE_TIME),
       };
     }
   }
@@ -109,9 +122,9 @@ async function resolveScaleLayout(
   // Type 2 : FFF0/FFF1, écriture unique FFF2 (unité + temps).
   const s2 = services.find((s) => shortUuid(s.uuid) === "0xfff0");
   if (s2) {
-    const notify = await s2.getCharacteristic(0xfff1).catch(() => null);
+    const notify = trouver(s2, 0xfff1);
     if (notify) {
-      const w = await s2.getCharacteristic(0xfff2).catch(() => null);
+      const w = trouver(s2, 0xfff2);
       logNote("Disposition QN Type 2 (FFF0) détectée.");
       return { notify: [notify], writeUnit: w, writeTime: w };
     }
@@ -122,8 +135,7 @@ async function resolveScaleLayout(
   const notifiables: any[] = [];
   let write: any = null;
   for (const svc of services) {
-    const chars: any[] = await svc.getCharacteristics().catch(() => []);
-    for (const c of chars) {
+    for (const c of parService.get(svc) || []) {
       if (c.properties?.notify || c.properties?.indicate) notifiables.push(c);
       if (!write && (c.properties?.write || c.properties?.writeWithoutResponse)) write = c;
     }
@@ -510,9 +522,11 @@ export function useBluetoothScale() {
         try {
           // Course contre une horloge : sur certaines piles BLE, `startNotifications()` ne
           // se résout JAMAIS. Sans ce garde-fou, la pesée reste figée sans message.
+          // 5 s et non 8 : la balance ne reste éveillée que quelques secondes, et deux
+          // caractéristiques à 8 s consommaient 16 s à elles seules.
           await Promise.race([
             c.startNotifications(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (8 s)")), 8000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (5 s)")), 5000)),
           ]);
           c.addEventListener("characteristicvaluechanged", (event: any) => {
             const v = event.target?.value as DataView | undefined;
@@ -521,13 +535,21 @@ export function useBluetoothScale() {
           abonnees++;
           logNote(`Notifications actives sur ${shortUuid(c.uuid)}.`);
         } catch (e: any) {
-          logNote(`Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e}`);
+          // L'état du lien AU MOMENT de l'échec tranche entre les deux causes possibles :
+          // lien tombé (la balance s'est rendormie) ou lien vivant mais abonnement refusé
+          // (pile Android qui n'aboutit pas). Sans cette information, impossible de choisir.
+          const lien = server?.connected ? "lien encore actif" : "LIEN DÉJÀ COUPÉ";
+          logNote(
+            `Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e} [${lien}]`
+          );
         }
       }
 
       if (abonnees === 0) {
         throw new Error(
-          "La balance a été trouvée mais refuse d'envoyer ses mesures. Sur Android, retirez-la des appareils Bluetooth appairés du téléphone, puis réessayez. Ouvrez le panneau Diagnostic pour le détail."
+          server?.connected
+            ? "La balance est connectée mais n'accepte pas d'envoyer ses mesures (Android bloque l'abonnement). Retirez « FitTrack » des appareils Bluetooth appairés du téléphone, fermez l'app FitTrack, puis réessayez."
+            : "La balance s'est déconnectée avant d'avoir pu envoyer ses mesures : elle se rendort en quelques secondes. Remontez dessus pour la réveiller, puis relancez la pesée sans attendre."
         );
       }
       logNote(`Notifications activées (${abonnees}/${layout.notify.length}). En attente de pesée…`);
