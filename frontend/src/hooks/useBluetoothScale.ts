@@ -529,9 +529,21 @@ export function useBluetoothScale() {
         });
       }
 
+      // Descripteurs journalisés AVANT toute tentative : `startNotifications()` doit écrire
+      // le descripteur CCCD (0x2902). Son ABSENCE, ou un accès qui exige un lien chiffré,
+      // est la cause connue d'un abonnement qui n'aboutit jamais sur Android alors qu'il
+      // passe sur Windows. Sans cette ligne dans le journal, on ne peut que supposer.
+      for (const c of layout.notify) {
+        const ds: any[] = await c.getDescriptors?.().catch(() => []) ?? [];
+        logNote(
+          `  descripteurs de ${shortUuid(c.uuid)} : ${ds.map((d) => shortUuid(d.uuid)).join(", ") || "(AUCUN — notifications impossibles à activer)"}`
+        );
+      }
+
       let abonnees = 0;
       let fileBloquee = false;
-      for (const c of layout.notify) {
+      for (let i = 0; i < layout.notify.length; i++) {
+        const c = layout.notify[i];
         let minuteur: number | undefined;
         try {
           // Un `Promise.race` abandonne l'ATTENTE, jamais l'opération GATT elle-même :
@@ -544,18 +556,29 @@ export function useBluetoothScale() {
             }),
           ]);
           abonnees++;
+          fileBloquee = false;
           logNote(`Notifications actives sur ${shortUuid(c.uuid)}.`);
         } catch (e: any) {
           const lien = server?.connected ? "lien encore actif" : "LIEN DÉJÀ COUPÉ";
           logNote(
             `Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e} [${lien}]`
           );
-          // Un délai dépassé signifie que l'opération est TOUJOURS en file. Enchaîner sur
-          // la caractéristique suivante la condamne d'avance — elle attendra derrière — et
-          // double l'attente subie. On s'arrête net.
           if (/délai dépassé/.test(e?.message || "")) {
             fileBloquee = true;
-            break;
+            // L'opération est toujours en file : la caractéristique suivante attendrait
+            // derrière elle et échouerait identiquement. La SEULE façon de lui laisser sa
+            // chance est de repartir d'un lien neuf — se contenter d'abandonner (ce que je
+            // faisais) ne testait jamais la seconde.
+            if (i < layout.notify.length - 1) {
+              try {
+                if (server?.connected) server.disconnect();
+                logNote("File GATT bloquée → reconnexion avant d'essayer la suivante.");
+                await deviceRef.current.gatt.connect();
+              } catch (re: any) {
+                logNote(`Reconnexion impossible : ${re?.message || re}`);
+                break;
+              }
+            }
           }
         } finally {
           // Sans ça, le minuteur d'un abonnement RÉUSSI continue de courir et rejette dans
@@ -566,8 +589,7 @@ export function useBluetoothScale() {
 
       if (abonnees === 0) {
         // La pile GATT est laissée dans un état inutilisable : on coupe explicitement pour
-        // que la tentative suivante reparte d'un lien neuf, au lieu d'hériter de la file
-        // bloquée et d'échouer identiquement.
+        // que la tentative suivante reparte d'un lien neuf.
         try {
           if (server?.connected) server.disconnect();
         } catch {
@@ -575,7 +597,7 @@ export function useBluetoothScale() {
         }
         throw new Error(
           fileBloquee
-            ? "La balance a accepté la connexion mais n'a jamais confirmé l'envoi de ses mesures — c'est le comportement typique d'Android quand la balance est déjà appairée au téléphone. Retirez « FitTrack » des appareils Bluetooth du téléphone, fermez l'app FitTrack, remontez sur la balance, puis relancez."
+            ? "La balance accepte la connexion mais ne confirme jamais l'activation de ses notifications. Ce blocage vient d'Android, pas de la balance : essayez de l'APPAIRER dans les réglages Bluetooth du téléphone (certaines balances exigent un lien chiffré), puis relancez. Ouvrez le Diagnostic et envoyez-le-moi si ça persiste."
             : "La balance s'est déconnectée avant d'avoir pu envoyer ses mesures : elle se rendort en quelques secondes. Remontez dessus pour la réveiller, puis relancez la pesée sans attendre."
         );
       }
