@@ -59,7 +59,12 @@ function shortUuid(uuid: string): string {
 }
 
 interface ScaleLayout {
-  notify: any;
+  // TOUTES les caractéristiques notifiables retenues, pas une seule.
+  // Choisir « la première qui notifie » est un pari sur l'ordre de getCharacteristics(),
+  // que la spec ne garantit pas : deux plateformes peuvent le rendre différemment, et on
+  // s'abonne alors à une caractéristique muette pendant que les trames passent à côté.
+  // S'abonner à toutes coûte quelques opérations GATT et supprime le pari.
+  notify: any[];
   writeUnit: any;
   writeTime: any;
 }
@@ -77,7 +82,14 @@ async function resolveScaleLayout(
   logNote(`Services : ${services.map((s) => shortUuid(s.uuid)).join(", ") || "(aucun candidat visible)"}`);
   for (const svc of services) {
     const chars: any[] = await svc.getCharacteristics().catch(() => []);
-    logNote(`  ${shortUuid(svc.uuid)} → ${chars.map((c) => shortUuid(c.uuid)).join(", ") || "(aucune)"}`);
+    // Les PROPRIÉTÉS sont journalisées, pas seulement les UUID : sans elles, un log de
+    // terrain ne dit pas si la caractéristique choisie savait seulement notifier.
+    const decrire = (c: any) => {
+      const p = c.properties || {};
+      const flags = [p.notify && "notify", p.indicate && "indicate", p.write && "write", p.writeWithoutResponse && "writeSR"].filter(Boolean);
+      return `${shortUuid(c.uuid)}${flags.length ? ` (${flags.join("/")})` : ""}`;
+    };
+    logNote(`  ${shortUuid(svc.uuid)} → ${chars.map(decrire).join(", ") || "(aucune)"}`);
   }
 
   // Type 1 : FFE0/FFE1, écritures séparées FFE3 (unité) et FFE4 (temps).
@@ -87,7 +99,7 @@ async function resolveScaleLayout(
     if (notify) {
       logNote("Disposition QN Type 1 (FFE0) détectée.");
       return {
-        notify,
+        notify: [notify],
         writeUnit: await s1.getCharacteristic(QN_WRITE_UNIT).catch(() => null),
         writeTime: await s1.getCharacteristic(QN_WRITE_TIME).catch(() => null),
       };
@@ -101,21 +113,28 @@ async function resolveScaleLayout(
     if (notify) {
       const w = await s2.getCharacteristic(0xfff2).catch(() => null);
       logNote("Disposition QN Type 2 (FFF0) détectée.");
-      return { notify, writeUnit: w, writeTime: w };
+      return { notify: [notify], writeUnit: w, writeTime: w };
     }
   }
 
-  // Dynamique : premier service exposant une notification (+ une écriture si dispo).
+  // Dynamique : TOUTES les caractéristiques notifiables, tous services confondus
+  // (+ la première écriture rencontrée, si elle existe).
+  const notifiables: any[] = [];
+  let write: any = null;
   for (const svc of services) {
     const chars: any[] = await svc.getCharacteristics().catch(() => []);
-    const notify = chars.find((c) => c.properties?.notify || c.properties?.indicate);
-    const write = chars.find((c) => c.properties?.write || c.properties?.writeWithoutResponse);
-    if (notify) {
-      logNote(
-        `Disposition dynamique : notify ${shortUuid(notify.uuid)}${write ? ", write " + shortUuid(write.uuid) : ""}.`
-      );
-      return { notify, writeUnit: write || null, writeTime: write || null };
+    for (const c of chars) {
+      if (c.properties?.notify || c.properties?.indicate) notifiables.push(c);
+      if (!write && (c.properties?.write || c.properties?.writeWithoutResponse)) write = c;
     }
+  }
+  if (notifiables.length) {
+    logNote(
+      `Disposition dynamique : notify ${notifiables.map((c) => shortUuid(c.uuid)).join(" + ")}${
+        write ? ", write " + shortUuid(write.uuid) : ""
+      }.`
+    );
+    return { notify: notifiables, writeUnit: write, writeTime: write };
   }
 
   return null;
@@ -474,7 +493,7 @@ export function useBluetoothScale() {
       // Découvrir la disposition GATT réelle (FFE0 Type 1, FFF0 Type 2, ou dynamique)
       // et journaliser les services/caractéristiques pour diagnostic.
       const layout = await resolveScaleLayout(server, logNote);
-      if (!layout || !layout.notify) {
+      if (!layout || layout.notify.length === 0) {
         throw new Error(
           "Aucun service de balance compatible trouvé. Ouvrez le panneau Diagnostic et envoyez-moi la liste des services."
         );
@@ -482,12 +501,36 @@ export function useBluetoothScale() {
       writeUnitRef.current = layout.writeUnit;
       writeTimeRef.current = layout.writeTime;
 
-      await layout.notify.startNotifications();
-      layout.notify.addEventListener("characteristicvaluechanged", (event: any) => {
-        const v = event.target?.value as DataView | undefined;
-        if (v) handleFrame(v);
-      });
-      logNote("Notifications activées. En attente de pesée…");
+      // On s'abonne à CHAQUE caractéristique notifiable, une par une, et l'échec de l'une
+      // n'empêche pas les autres. Auparavant un seul `startNotifications()` non tenu
+      // interrompait toute la connexion : le journal s'arrêtait net après la découverte,
+      // sans jamais dire pourquoi (symptôme observé sur Android, alors que Windows passait).
+      let abonnees = 0;
+      for (const c of layout.notify) {
+        try {
+          // Course contre une horloge : sur certaines piles BLE, `startNotifications()` ne
+          // se résout JAMAIS. Sans ce garde-fou, la pesée reste figée sans message.
+          await Promise.race([
+            c.startNotifications(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (8 s)")), 8000)),
+          ]);
+          c.addEventListener("characteristicvaluechanged", (event: any) => {
+            const v = event.target?.value as DataView | undefined;
+            if (v) handleFrame(v);
+          });
+          abonnees++;
+          logNote(`Notifications actives sur ${shortUuid(c.uuid)}.`);
+        } catch (e: any) {
+          logNote(`Notifications REFUSÉES sur ${shortUuid(c.uuid)} : ${e?.name || "Error"} — ${e?.message || e}`);
+        }
+      }
+
+      if (abonnees === 0) {
+        throw new Error(
+          "La balance a été trouvée mais refuse d'envoyer ses mesures. Sur Android, retirez-la des appareils Bluetooth appairés du téléphone, puis réessayez. Ouvrez le panneau Diagnostic pour le détail."
+        );
+      }
+      logNote(`Notifications activées (${abonnees}/${layout.notify.length}). En attente de pesée…`);
     } catch (err: any) {
       const name = err?.name || "Error";
       const message = err?.message || String(err);
